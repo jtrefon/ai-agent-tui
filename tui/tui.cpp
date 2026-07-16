@@ -1,0 +1,399 @@
+#include <agent.h>
+
+#include "widgets.h"
+
+#include <algorithm>
+#include <fstream>
+#include <string>
+#include <vector>
+
+namespace {
+
+using tui::Dialog;
+using tui::FieldSpec;
+using tui::Pair;
+using tui::form_edit;
+using tui::info_dialog;
+using tui::menu_select;
+using tui::P_ASSISTANT;
+using tui::P_BANNER;
+using tui::P_STATUS;
+using tui::P_REASONING;
+using tui::P_USER;
+
+class Tui {
+public:
+    Tui(agent::Config cfg, agent::ToolRegistry& reg)
+        : cfg_(std::move(cfg)), reg_(reg) {
+        initscr();
+        cbreak();
+        noecho();
+        keypad(stdscr, TRUE);
+        set_escdelay(25);
+        curs_set(0);
+        start_color();
+        use_default_colors();
+        tui::init_pairs();
+    }
+
+    ~Tui() { endwin(); }
+
+    void run() {
+        draw();
+        banner("cpp-agent - F1 help  F2 config  F3 thinking  F10 settings  "
+               "Enter send  PgUp/PgDn scroll  Ctrl-C quit");
+        draw_input("");
+
+        std::string input;
+        while (true) {
+            int ch = getch();
+            if (ch == KEY_F(1)) { help_screen(); redraw(input); continue; }
+            if (ch == KEY_F(2)) { config_screen(); redraw(input); continue; }
+            if (ch == KEY_F(10)) { settings_screen(); redraw(input); continue; }
+            if (ch == KEY_F(3)) {
+                cfg_.show_reasoning = !cfg_.show_reasoning;
+                append_line(P_STATUS, std::string("thinking display: ") +
+                                          (cfg_.show_reasoning ? "on" : "off"));
+                draw(); draw_input(input); continue;
+            }
+            if (ch == KEY_NPAGE) {
+                scroll_top_ = std::min(max_scroll(),
+                                       scroll_top_ + lines_per_page());
+                draw(); draw_input(input); continue;
+            }
+            if (ch == KEY_PPAGE) {
+                scroll_top_ = std::max(0, scroll_top_ - lines_per_page());
+                draw(); draw_input(input); continue;
+            }
+            if (ch == 7 || ch == 10 || ch == 13 || ch == KEY_ENTER) {
+                if (input.empty()) continue;
+                std::string prompt = input;
+                append_line(P_USER, "> " + input);
+                input.clear();
+                draw_input("");
+                send(prompt);
+                draw_input("");
+                continue;
+            }
+            if (ch == KEY_BACKSPACE || ch == 127 || ch == 8) {
+                if (!input.empty()) input.pop_back();
+                draw_input(input);
+            } else if (ch >= 32 && ch <= 126) {
+                input += static_cast<char>(ch);
+                draw_input(input);
+            }
+        }
+    }
+
+private:
+    int height() const { int y, x; getmaxyx(stdscr, y, x); (void)x; return y; }
+    int width() const { int y, x; getmaxyx(stdscr, y, x); (void)y; return x; }
+    int lines_per_page() const { return std::max(1, height() - 2); }
+    int stream_lines() const {
+        return stream_buf_.empty()
+                   ? 0
+                   : static_cast<int>(wrap_text(stream_buf_, width()).size());
+    }
+    int max_scroll() const {
+        int m = static_cast<int>(lines_.size()) + stream_lines() - (height() - 2);
+        return m < 0 ? 0 : m;
+    }
+
+    void redraw(const std::string& input) {
+        touchwin(stdscr);
+        draw();
+        draw_input(input);
+    }
+
+    // Wrap `text` into display lines: honour embedded newlines, then word-wrap
+    // each paragraph to `w` columns (falling back to hard splits for words
+    // longer than the width). Tabs are expanded to spaces.
+    static std::vector<std::string> wrap_text(const std::string& text, int w) {
+        if (w <= 0) w = 80;
+        std::vector<std::string> out;
+        std::string src;
+        src.reserve(text.size());
+        for (char c : text) {
+            if (c == '\t') src += "    ";
+            else if (c == '\r') continue;
+            else src += c;
+        }
+        size_t start = 0;
+        while (start <= src.size()) {
+            size_t nl = src.find('\n', start);
+            std::string para = (nl == std::string::npos)
+                                   ? src.substr(start)
+                                   : src.substr(start, nl - start);
+            // word-wrap this paragraph
+            if (para.empty()) {
+                out.push_back("");
+            } else {
+                size_t p = 0;
+                while (p < para.size()) {
+                    size_t remain = para.size() - p;
+                    if (static_cast<int>(remain) <= w) {
+                        out.push_back(para.substr(p));
+                        break;
+                    }
+                    // find a space to break on within [p, p+w]
+                    size_t brk = para.rfind(' ', p + w);
+                    if (brk == std::string::npos || brk <= p) {
+                        out.push_back(para.substr(p, w));   // hard split
+                        p += w;
+                    } else {
+                        out.push_back(para.substr(p, brk - p));
+                        p = brk + 1;                        // skip the space
+                    }
+                }
+            }
+            if (nl == std::string::npos) break;
+            start = nl + 1;
+        }
+        return out;
+    }
+
+    void append_line(int color, const std::string& text) {
+        for (auto& l : wrap_text(text, width()))
+            lines_.push_back({color, l});
+        if (lines_.size() > 10000)
+            lines_.erase(lines_.begin(), lines_.begin() + 5000);
+        scroll_top_ = max_scroll();
+    }
+
+    void banner(const std::string& text) {
+        lines_.push_back({P_BANNER, text});
+        scroll_top_ = max_scroll();
+    }
+
+    void draw() {
+        erase();
+        int view_h = height() - 2;
+
+        // Build the full display list = committed lines + live (uncommitted)
+        // streaming buffer wrapped to the current width. The stream buffer is
+        // rendered in place and only committed once complete.
+        std::vector<std::pair<int, std::string>> pending;
+        if (show_reasoning_ && !reason_folded_ && !reason_buf_.empty()) {
+            pending.push_back({P_REASONING, "thinking..."});
+            for (auto& l : wrap_text(reason_buf_, width()))
+                pending.push_back({P_REASONING, l});
+        }
+        if (!stream_buf_.empty())
+            for (auto& l : wrap_text(stream_buf_, width()))
+                pending.push_back({stream_color_, l});
+
+        int total = static_cast<int>(lines_.size() + pending.size());
+        int max_top = std::max(0, total - view_h);
+        int start = std::min(scroll_top_, max_top);
+
+        for (int row = 0; row < view_h; ++row) {
+            int idx = start + row;
+            if (idx < 0 || idx >= total) continue;
+            const auto& [color, text] =
+                (idx < static_cast<int>(lines_.size()))
+                    ? lines_[idx]
+                    : pending[idx - lines_.size()];
+            bool dim = (color == P_REASONING);
+            attron(COLOR_PAIR(color) | (dim ? A_DIM : 0));
+            mvaddnstr(row, 0, text.c_str(), width());
+            attroff(COLOR_PAIR(color) | (dim ? A_DIM : 0));
+        }
+
+        attron(COLOR_PAIR(P_BANNER));
+        mvhline(height() - 2, 0, ' ', width());
+        std::string st = " lines:" + std::to_string(total) +
+                         " top:" + std::to_string(start + 1);
+        mvaddnstr(height() - 2, 0, st.c_str(), width());
+        attroff(COLOR_PAIR(P_BANNER));
+        refresh();
+    }
+
+    void draw_input(const std::string& s) {
+        int y = height() - 1;
+        move(y, 0);
+        clrtoeol();
+        attron(COLOR_PAIR(P_USER));
+        std::string shown = "prompt> " + s;
+        mvaddnstr(y, 0, shown.c_str(), width());
+        attroff(COLOR_PAIR(P_USER));
+        refresh();
+    }
+
+    void send(const std::string& prompt) {
+        agent::AgentHooks hooks;
+        reason_buf_.clear();
+        reason_folded_ = false;
+        show_reasoning_ = cfg_.show_reasoning;
+        hooks.on_reasoning = [this](const std::string& d) {
+            // Live thinking: accumulate and render dim, above the answer.
+            reason_buf_ += d;
+            scroll_top_ = max_scroll();
+            draw();
+        };
+        hooks.on_token = [this](const std::string& d) {
+            // First answer token: fold any thinking into one collapsible summary
+            // line so it stops occupying the viewport.
+            if (!reason_folded_ && !reason_buf_.empty()) {
+                fold_reasoning();
+            }
+            // Accumulate the partial message and re-render it live in place.
+            // Do NOT commit per token (that made each fragment its own line).
+            stream_color_ = P_ASSISTANT;
+            stream_buf_ += d;
+            scroll_top_ = max_scroll();   // auto-follow
+            draw();
+        };
+        hooks.on_assistant = [this](const std::string& s) {
+            // Non-streaming path: nothing was streamed, so commit the whole msg.
+            if (stream_buf_.empty()) append_line(P_ASSISTANT, s);
+        };
+        hooks.on_status = [this](const std::string& s) { append_line(P_STATUS, s); };
+        hooks.on_tool_call = [this](const std::string& n, const agent::json& a) {
+            flush_stream();
+            append_line(P_STATUS, "tool: " + n + " " + a.dump());
+        };
+        hooks.on_tool_result = [this](const std::string& n, const agent::ToolResult& r) {
+            append_line(P_STATUS, "result:" + n + " " + (r.ok ? r.output : r.error));
+        };
+        try {
+            agent::Agent agent(cfg_, reg_, hooks);
+            agent.run(prompt);
+        } catch (const std::exception& e) {
+            flush_stream();
+            append_line(P_STATUS, std::string("error: ") + e.what());
+        }
+        flush_stream();
+        draw();
+    }
+
+    // Collapse the live thinking buffer into a single dim summary line. The
+    // full reasoning is preserved in the telemetry log, not the viewport.
+    void fold_reasoning() {
+        if (reason_folded_) return;
+        reason_folded_ = true;
+        if (reason_buf_.empty()) return;
+        size_t words = 1;
+        for (char ch : reason_buf_) if (ch == ' ') ++words;
+        append_line(P_REASONING,
+                    "[thought for " + std::to_string(words) + " words]");
+        reason_buf_.clear();
+    }
+
+    void flush_stream() {
+        // If we finished on pure thinking (no answer streamed), still fold it.
+        if (!reason_folded_ && !reason_buf_.empty()) fold_reasoning();
+        if (stream_buf_.empty()) return;
+        append_line(stream_color_, stream_buf_);
+        stream_buf_.clear();
+        draw();
+    }
+
+    void help_screen() {
+        info_dialog("Help", {
+            "F1        show this help",
+            "F2        show configuration",
+            "F3        toggle live thinking display",
+            "F10       server settings (URL, token, model)",
+            "Enter     send the prompt",
+            "Ctrl-G    send the prompt",
+            "PgUp/PgDn scroll scrollback",
+            "Ctrl-C    quit",
+            "",
+            "Tools: read (paginated), write (patch), search (grep/semantic).",
+        });
+    }
+
+    void config_screen() {
+        auto mask = [](const std::string& s) {
+            return s.empty() ? std::string("(unset)") : std::string(s.size(), '*');
+        };
+        info_dialog("Configuration", {
+            "api_base:  " + cfg_.api_base,
+            "api_key:   " + mask(cfg_.api_key),
+            "model:     " + cfg_.model,
+            "stream:    " + std::string(cfg_.stream ? "on" : "off"),
+            "max_iter:  " + std::to_string(cfg_.max_tool_iterations),
+            "system:    " + cfg_.system_prompt_path,
+            "tools:     " + cfg_.tools_prompt_path,
+        });
+    }
+
+    // Server settings using a native libform dialog.
+    void settings_screen() {
+        std::vector<FieldSpec> fields = {
+            {"Server URL", cfg_.api_base, false},
+            {"Token", cfg_.api_key, true},
+            {"Model", cfg_.model, false},
+        };
+        if (!form_edit("Server settings", fields)) return;
+
+        cfg_.api_base = fields[0].value;
+        cfg_.api_key = fields[1].value;
+        cfg_.model = fields[2].value;
+
+        std::vector<std::string> post = {"Save to " + settings_path_,
+                                         "Apply only (don't save)"};
+        int choice = menu_select("Apply settings?", post);
+        if (choice == 0) {
+            save_settings();
+            append_line(P_STATUS, "settings saved to " + settings_path_);
+        } else if (choice == 1) {
+            append_line(P_STATUS, "settings applied (not saved)");
+        }
+    }
+
+    void save_settings() {
+        std::ofstream f(settings_path_, std::ios::trunc);
+        if (!f) return;
+        f << "# cpp-agent settings\n";
+        f << "api_base=" << cfg_.api_base << "\n";
+        f << "api_key=" << cfg_.api_key << "\n";
+        f << "model=" << cfg_.model << "\n";
+        f << "system_prompt=" << cfg_.system_prompt_path << "\n";
+        f << "tools_prompt=" << cfg_.tools_prompt_path << "\n";
+    }
+
+    agent::Config cfg_;
+    agent::ToolRegistry& reg_;
+    std::string settings_path_ = "cpp-agent.conf";
+    std::vector<std::pair<int, std::string>> lines_;
+    int scroll_top_ = 0;
+    std::string stream_buf_;
+    int stream_color_ = P_ASSISTANT;
+    std::string reason_buf_;        // live thinking text, before folding
+    bool reason_folded_ = false;    // collapsed to a summary line yet?
+    bool show_reasoning_ = true;    // toggle live thinking display
+};
+
+} // namespace
+
+int main(int argc, char** argv) {
+    agent::Config cfg;
+    std::string config_file;
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--config" && i + 1 < argc) config_file = argv[++i];
+        else if (a == "--api-base" && i + 1 < argc) cfg.api_base = argv[++i];
+        else if (a == "--api-key" && i + 1 < argc) cfg.api_key = argv[++i];
+        else if (a == "--model" && i + 1 < argc) cfg.model = argv[++i];
+        else if (a == "--system" && i + 1 < argc) cfg.system_prompt_path = argv[++i];
+        else if (a == "--tools" && i + 1 < argc) cfg.tools_prompt_path = argv[++i];
+        else if (a == "--no-stream") cfg.stream = false;
+    }
+    if (!config_file.empty()) cfg.load(config_file);
+    {
+        std::ifstream sf("cpp-agent.conf");
+        if (sf) cfg.load("cpp-agent.conf");
+    }
+    cfg.apply_environment();
+
+    if (cfg.system_prompt_path.empty()) cfg.system_prompt_path = "prompts/system.md";
+    if (cfg.tools_prompt_path.empty()) cfg.tools_prompt_path = "prompts/tools.md";
+
+    agent::ToolRegistry registry;
+    agent::register_default_tools(registry);
+
+    Tui tui(cfg, registry);
+    tui.run();
+    return 0;
+}

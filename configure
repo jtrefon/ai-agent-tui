@@ -1,0 +1,134 @@
+#!/bin/sh
+# configure - minimal autotools-style configuration script for cpp-agent
+# Generates Makefile from Makefile.in.
+# This is free software released under the GPL-3.0-or-later.
+
+set -e
+
+srcdir=$(cd "$(dirname "$0")" && pwd)
+builddir=$(pwd)
+
+prefix="/usr/local"
+bindir=""
+libdir=""
+includedir=""
+with_curl_cflags=""
+with_curl_libs=""
+
+usage() {
+    cat <<EOF
+Usage: ./configure [options]
+
+Options:
+  --prefix=DIR        installation prefix (default: /usr/local)
+  --bindir=DIR        user executables (default: PREFIX/bin)
+  --libdir=DIR        object code libraries (default: PREFIX/lib)
+  --includedir=DIR    C header files (default: PREFIX/include)
+  --help              show this help
+
+The script auto-detects the C++ compiler, libcurl, and pkg-config.
+EOF
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        --prefix=*)   prefix="${arg#*=}" ;;
+        --bindir=*)   bindir="${arg#*=}" ;;
+        --libdir=*)   libdir="${arg#*=}" ;;
+        --includedir=*) includedir="${arg#*=}" ;;
+        --help|-h)    usage; exit 0 ;;
+        *) echo "configure: unknown option: $arg" >&2; usage >&2; exit 1 ;;
+    esac
+done
+
+[ -z "$bindir" ]     && bindir="$prefix/bin"
+[ -z "$libdir" ]     && libdir="$prefix/lib"
+[ -z "$includedir" ] && includedir="$prefix/include"
+
+echo "checking for C++ compiler..."
+if command -v g++ >/dev/null 2>&1; then
+    CXX=${CXX:-g++}
+elif command -v clang++ >/dev/null 2>&1; then
+    CXX=${CXX:-clang++}
+elif [ -n "$CXX" ]; then
+    :
+else
+    echo "configure: error: no C++ compiler found (need g++ or clang++)" >&2
+    exit 1
+fi
+echo "  using $CXX"
+
+CXXFLAGS=${CXXFLAGS:-"-O2 -Wall -Wextra -std=c++17"}
+CPPFLAGS=${CPPFLAGS:-""}
+
+# locate libcurl
+echo "checking for libcurl..."
+if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libcurl; then
+    CURL_CFLAGS=$(pkg-config --cflags libcurl)
+    CURL_LIBS=$(pkg-config --libs libcurl)
+elif curl-config >/dev/null 2>&1; then
+    CURL_CFLAGS=$(curl-config --cflags)
+    CURL_LIBS=$(curl-config --libs)
+else
+    CURL_CFLAGS="-I/usr/include"
+    CURL_LIBS="-lcurl"
+fi
+echo "  curl cflags: $CURL_CFLAGS"
+echo "  curl libs:   $CURL_LIBS"
+
+# basic curl header sanity check
+cat > "$builddir/conftest.cpp" <<'EOF'
+#include <curl/curl.h>
+int main() { return curl_easy_init() ? 0 : 1; }
+EOF
+if ! $CXX $CXXFLAGS $CPPFLAGS $CURL_CFLAGS "$builddir/conftest.cpp" \
+        $CURL_LIBS -o "$builddir/conftest" 2>"$builddir/conftest.err"; then
+    echo "configure: error: libcurl compile/link test failed:" >&2
+    cat "$builddir/conftest.err" >&2
+    rm -f "$builddir/conftest.cpp" "$builddir/conftest" "$builddir/conftest.err"
+    exit 1
+fi
+rm -f "$builddir/conftest.cpp" "$builddir/conftest" "$builddir/conftest.err"
+
+# openssl is used indirectly via libcurl; verify headers exist for any direct use
+echo "checking for openssl..."
+if [ -f /usr/include/openssl/ssl.h ]; then
+    echo "  found /usr/include/openssl/ssl.h"
+else
+    echo "  warning: openssl headers not found at /usr/include/openssl/ssl.h"
+fi
+
+# ncurses (+ form/menu/panel widget libs) for the TUI client
+echo "checking for ncurses (form, menu, panel)..."
+if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists form menu panel ncurses; then
+    NCURSES_LIBS=$(pkg-config --libs form menu panel ncurses)
+    NCURSES_CFLAGS=$(pkg-config --cflags form menu panel ncurses)
+elif command -v pkg-config >/dev/null 2>&1 && pkg-config --exists formw menuw panelw ncursesw; then
+    NCURSES_LIBS=$(pkg-config --libs formw menuw panelw ncursesw)
+    NCURSES_CFLAGS=$(pkg-config --cflags formw menuw panelw ncursesw)
+else
+    NCURSES_LIBS="-lform -lmenu -lpanel -lncurses"
+    NCURSES_CFLAGS=""
+fi
+echo "  ncurses libs: $NCURSES_LIBS"
+
+# project include dir (vendored nlohmann/json + local headers + tools + tests)
+PROJECT_CPPFLAGS="-I$srcdir/include -I$srcdir/src -I$srcdir/tools -I$srcdir"
+
+sed -e "s|@srcdir@|$srcdir|g" \
+    -e "s|@builddir@|$builddir|g" \
+    -e "s|@prefix@|$prefix|g" \
+    -e "s|@bindir@|$bindir|g" \
+    -e "s|@libdir@|$libdir|g" \
+    -e "s|@includedir@|$includedir|g" \
+    -e "s|@CXX@|$CXX|g" \
+    -e "s|@CXXFLAGS@|$CXXFLAGS|g" \
+    -e "s|@CPPFLAGS@|$CPPFLAGS $PROJECT_CPPFLAGS|g" \
+    -e "s|@CURL_CFLAGS@|$CURL_CFLAGS|g" \
+    -e "s|@CURL_LIBS@|$CURL_LIBS|g" \
+    -e "s|@NCURSES_LIBS@|$NCURSES_LIBS|g" \
+    -e "s|@NCURSES_CFLAGS@|$NCURSES_CFLAGS|g" \
+    "$srcdir/Makefile.in" > "$builddir/Makefile"
+
+echo "configure: created Makefile"
+echo "configure: now run 'make'"
