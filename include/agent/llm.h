@@ -28,6 +28,16 @@ struct StreamChunk {
     json tool_calls;                     // incremental tool_call fragments (if any)
 };
 
+// Per-request telemetry, surfaced to UIs for the status bar. Filled in after a
+// chat/chat_stream call completes. Fields are -1/0 when unknown.
+struct Stats {
+    double latency_ms = -1;              // time-to-first-byte (server "lag")
+    double tps = -1;                     // completion tokens / generation time
+    long prompt_tokens = -1;            // usage.prompt_tokens (context used)
+    long completion_tokens = -1;        // usage.completion_tokens
+    bool valid = false;                  // true once a request populated it
+};
+
 // Thin client over an OpenAI-compatible /chat/completions endpoint using
 // libcurl. The library does not own the conversation state; callers pass the
 // full message list each turn. Supports both buffered (chat) and streamed
@@ -37,16 +47,20 @@ public:
     explicit LLMClient(const Config& cfg);
 
     // Buffered request: returns the full assistant message (may include
-    // tool_calls). Throws std::runtime_error on transport/API failure.
+    // tool_calls). Throws std::runtime_error on transport/API failure. When
+    // `stats` is non-null it is filled with per-request telemetry.
     Message chat(const std::vector<Message>& messages,
-                 const std::vector<Tool*>& tools);
+                 const std::vector<Tool*>& tools,
+                 Stats* stats = nullptr);
 
     // Streaming request: invokes `on_chunk` for every parsed SSE event and
     // returns the assembled assistant message. The callback receives partial
-    // text as it arrives, enabling live TUI rendering.
+    // text as it arrives, enabling live TUI rendering. When `stats` is non-null
+    // it is filled with per-request telemetry after completion.
     Message chat_stream(const std::vector<Message>& messages,
                         const std::vector<Tool*>& tools,
-                        const std::function<void(const StreamChunk&)>& on_chunk);
+                        const std::function<void(const StreamChunk&)>& on_chunk,
+                        Stats* stats = nullptr);
 
 private:
     Config cfg_;

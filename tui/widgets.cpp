@@ -19,6 +19,10 @@ void init_pairs() {
     init_pair(P_BUTTON,     COLOR_BLACK,  COLOR_WHITE);
     init_pair(P_BUTTON_ACT, COLOR_WHITE,  COLOR_MAGENTA);
     init_pair(P_SHADOW,     COLOR_BLACK,  COLOR_BLACK);
+    init_pair(P_GAUGE_OK,   COLOR_GREEN,   COLOR_BLUE);
+    init_pair(P_GAUGE_WARN, COLOR_YELLOW,  COLOR_BLUE);
+    init_pair(P_GAUGE_CRIT, COLOR_RED,     COLOR_BLUE);
+    init_pair(P_BAR_DIM,    COLOR_CYAN,    COLOR_BLUE);
 }
 
 Dialog::Dialog(int h, int w, const std::string& title) {

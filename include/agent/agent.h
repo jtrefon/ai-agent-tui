@@ -30,6 +30,16 @@ private:
     std::string session_;
 };
 
+// Coarse activity state for a status-bar connection indicator.
+enum class RunState {
+    Idle,        // waiting, no request in flight
+    Waiting,     // request sent, awaiting first byte
+    Thinking,    // reasoning tokens arriving
+    Streaming,   // answer tokens arriving
+    Tooling,     // executing a tool call
+    Error        // last request failed
+};
+
 // A hook invoked on each significant event so UIs can render progress without
 // the library knowing about them. The default no-op is used by headless runs.
 struct AgentHooks {
@@ -39,6 +49,8 @@ struct AgentHooks {
     std::function<void(const std::string&, const json&)> on_tool_call;
     std::function<void(const std::string&, const ToolResult&)> on_tool_result;
     std::function<void(const std::string&)> on_status;
+    std::function<void(RunState)> on_state;                 // activity transitions
+    std::function<void(const Stats&)> on_stats;             // per-request telemetry
 };
 
 // The core agent loop. Given an initial user prompt it drives the conversation:

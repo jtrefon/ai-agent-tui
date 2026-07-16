@@ -290,6 +290,55 @@ TEST(search_tool_mode_switch) {
 }
 
 // ---------------------------------------------------------------------------
+// Status-bar rendering math (pure, no ncurses / no network)
+// ---------------------------------------------------------------------------
+
+TEST(statusbar_kfmt) {
+    ASSERT_EQ(agent::bar::kfmt(-1), "?");
+    ASSERT_EQ(agent::bar::kfmt(0), "0");
+    ASSERT_EQ(agent::bar::kfmt(512), "512");
+    ASSERT_EQ(agent::bar::kfmt(999), "999");
+    ASSERT_EQ(agent::bar::kfmt(5000), "5.0k");
+    ASSERT_EQ(agent::bar::kfmt(1500), "1.5k");
+    ASSERT_EQ(agent::bar::kfmt(128000), "128k");
+}
+
+TEST(statusbar_pressure_thresholds) {
+    ASSERT(agent::bar::pressure(0.0) == agent::bar::Pressure::Ok);
+    ASSERT(agent::bar::pressure(0.59) == agent::bar::Pressure::Ok);
+    ASSERT(agent::bar::pressure(0.60) == agent::bar::Pressure::Warn);
+    ASSERT(agent::bar::pressure(0.85) == agent::bar::Pressure::Warn);
+    ASSERT(agent::bar::pressure(0.851) == agent::bar::Pressure::Crit);
+    ASSERT(agent::bar::pressure(1.0) == agent::bar::Pressure::Crit);
+}
+
+TEST(statusbar_gauge_fill_cells) {
+    // Empty and full extremes.
+    ASSERT_EQ(agent::bar::gauge_full_cells(0.0, 10), 0);
+    ASSERT_EQ(agent::bar::gauge_full_cells(1.0, 10), 10);
+    // Half fill of 10 cells = 5 full cells.
+    ASSERT_EQ(agent::bar::gauge_full_cells(0.5, 10), 5);
+    // Clamps out-of-range fractions.
+    ASSERT_EQ(agent::bar::gauge_full_cells(-0.5, 10), 0);
+    ASSERT_EQ(agent::bar::gauge_full_cells(2.0, 10), 10);
+    ASSERT_EQ(agent::bar::gauge_full_cells(0.5, 0), 0);
+}
+
+TEST(statusbar_gauge_bar_glyphs) {
+    // Empty bar is all light-shade track (\u2591), one per cell (3 bytes each).
+    std::string empty = agent::bar::gauge_bar(0.0, 4);
+    ASSERT_EQ(empty, "\u2591\u2591\u2591\u2591");
+    // Full bar is all full blocks (\u2588).
+    std::string full = agent::bar::gauge_bar(1.0, 4);
+    ASSERT_EQ(full, "\u2588\u2588\u2588\u2588");
+    // Half of 4 cells: two full blocks then two empty.
+    std::string half = agent::bar::gauge_bar(0.5, 4);
+    ASSERT_EQ(half, "\u2588\u2588\u2591\u2591");
+    // Degenerate width.
+    ASSERT_EQ(agent::bar::gauge_bar(0.5, 0), "");
+}
+
+// ---------------------------------------------------------------------------
 // LLM streaming SSE parse (integration via a tiny in-process HTTP server)
 // ---------------------------------------------------------------------------
 
@@ -432,6 +481,35 @@ TEST(llm_streaming_reasoning_content_field) {
 
     ASSERT_EQ(m.content, "done");
     ASSERT_EQ(m.reasoning, "step one step two");
+    close(srv);
+}
+
+TEST(llm_streaming_captures_usage_stats) {
+    std::string dummy;
+    // Final include_usage chunk: usage present, empty choices[] (llama.cpp/vLLM).
+    std::string sse =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4096,"
+        "\"completion_tokens\":128,\"total_tokens\":4224}}\n\n"
+        "data: [DONE]\n\n";
+    int srv = spawn_mock_sse(8914, dummy, sse);
+    ASSERT(srv >= 0);
+    usleep(100000);
+
+    agent::Config cfg;
+    cfg.api_base = "http://127.0.0.1:8914/v1";
+    cfg.stream = true;
+    agent::LLMClient client(cfg);
+
+    agent::Stats stats;
+    agent::Message m = client.chat_stream({}, {},
+        [](const agent::StreamChunk&) {}, &stats);
+
+    ASSERT_EQ(m.content, "hi");
+    ASSERT_TRUE(stats.valid);
+    ASSERT_EQ(stats.prompt_tokens, 4096L);
+    ASSERT_EQ(stats.completion_tokens, 128L);
+    ASSERT_TRUE(stats.latency_ms >= 0);
     close(srv);
 }
 #endif // __linux__

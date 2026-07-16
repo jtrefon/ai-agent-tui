@@ -28,6 +28,11 @@ enum Pair {
     P_BUTTON,       // button (unfocused)
     P_BUTTON_ACT,   // button (focused)
     P_SHADOW,       // drop shadow
+    // Status-bar gauge / state segments (colored foreground on the blue bar).
+    P_GAUGE_OK,     // context gauge, low pressure   (green on blue)
+    P_GAUGE_WARN,   // context gauge, mid pressure    (yellow on blue)
+    P_GAUGE_CRIT,   // context gauge, high pressure   (red on blue)
+    P_BAR_DIM,      // dim gauge track / faint labels (cyan on blue)
 };
 
 // Register all color pairs. Requires start_color() (and, ideally,

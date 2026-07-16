@@ -98,16 +98,20 @@ else
     echo "  warning: openssl headers not found at /usr/include/openssl/ssl.h"
 fi
 
-# ncurses (+ form/menu/panel widget libs) for the TUI client
+# ncurses (+ form/menu/panel widget libs) for the TUI client.
+# Prefer the WIDE (ncursesw) variants: they are required for correct UTF-8 /
+# multibyte glyph rendering (box drawing, block gauges, emoji). Falling back to
+# the narrow library mangles multibyte output into per-byte garbage.
 echo "checking for ncurses (form, menu, panel)..."
-if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists form menu panel ncurses; then
-    NCURSES_LIBS=$(pkg-config --libs form menu panel ncurses)
-    NCURSES_CFLAGS=$(pkg-config --cflags form menu panel ncurses)
-elif command -v pkg-config >/dev/null 2>&1 && pkg-config --exists formw menuw panelw ncursesw; then
+if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists formw menuw panelw ncursesw; then
     NCURSES_LIBS=$(pkg-config --libs formw menuw panelw ncursesw)
     NCURSES_CFLAGS=$(pkg-config --cflags formw menuw panelw ncursesw)
+elif command -v pkg-config >/dev/null 2>&1 && pkg-config --exists form menu panel ncurses; then
+    echo "  warning: wide ncursesw not found; UTF-8 glyphs may render incorrectly"
+    NCURSES_LIBS=$(pkg-config --libs form menu panel ncurses)
+    NCURSES_CFLAGS=$(pkg-config --cflags form menu panel ncurses)
 else
-    NCURSES_LIBS="-lform -lmenu -lpanel -lncurses"
+    NCURSES_LIBS="-lformw -lmenuw -lpanelw -lncursesw"
     NCURSES_CFLAGS=""
 fi
 echo "  ncurses libs: $NCURSES_LIBS"

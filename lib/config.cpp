@@ -28,6 +28,7 @@ void Config::load(const std::string& path) {
         else if (key == "stream") stream = (val == "1" || val == "true" || val == "yes");
         else if (key == "thinking") thinking = val;
         else if (key == "thinking_budget") thinking_budget = std::stoi(val);
+        else if (key == "context_size") context_size = std::stoi(val);
         else if (key == "log_path") log_path = val;
         else if (key == "debug_log") debug_log = val;
         else if (key == "reasoning_effort") reasoning_effort = val;
@@ -51,6 +52,8 @@ void Config::apply_environment() {
     get("CPP_AGENT_THINKING", thinking);
     const char* tb = std::getenv("CPP_AGENT_THINKING_BUDGET");
     if (tb) thinking_budget = std::atoi(tb);
+    const char* cs = std::getenv("CPP_AGENT_CONTEXT");
+    if (cs) context_size = std::atoi(cs);
     get("CPP_AGENT_LOG", log_path);
     get("CPP_AGENT_DEBUG", debug_log);
     get("CPP_AGENT_REASONING", reasoning_effort);

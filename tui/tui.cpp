@@ -3,6 +3,8 @@
 #include "widgets.h"
 
 #include <algorithm>
+#include <clocale>
+#include <cstdio>
 #include <ctime>
 #include <fstream>
 #include <string>
@@ -21,11 +23,18 @@ using tui::P_BANNER;
 using tui::P_STATUS;
 using tui::P_REASONING;
 using tui::P_USER;
+using tui::P_GAUGE_OK;
+using tui::P_GAUGE_WARN;
+using tui::P_GAUGE_CRIT;
+using tui::P_BAR_DIM;
 
 class Tui {
 public:
     Tui(agent::Config cfg, agent::ToolRegistry& reg)
         : cfg_(std::move(cfg)), reg_(reg) {
+        // Honour the user's locale so ncursesw can encode/decode multibyte
+        // UTF-8 glyphs (box drawing, block gauges, dots). Must precede initscr.
+        std::setlocale(LC_ALL, "");
         initscr();
         cbreak();
         noecho();
@@ -278,32 +287,214 @@ private:
             attroff(COLOR_PAIR(color) | (dim ? A_DIM : 0));
         }
 
-        std::string st = " lines:" + std::to_string(total) +
-                         " top:" + std::to_string(start + 1);
-        draw_status_bar(st);
+        draw_status_bar("ln " + std::to_string(start + 1) + "/" +
+                        std::to_string(total));
         refresh();
     }
 
-    // Render the blue status bar with left-aligned info and an IRC-style clock
-    // pinned to the right. Cheap enough to call once a second for a live tick.
-    void draw_status_bar(const std::string& left) {
+    // A run of bar text sharing one color pair. Sequenced left-to-right to build
+    // the status bar; each carries a drop-priority so we can shed segments when
+    // the terminal is too narrow (higher priority = dropped first).
+    struct Seg {
+        std::string text;
+        int pair = P_BANNER;
+        int drop = 0;   // 0 = never drop; larger = shed sooner
+    };
+
+    static int display_cols(const std::string& s) {
+        int cols = 0;
+        for (size_t i = 0; i < s.size(); i += utf8_len(s, i)) ++cols;
+        return cols;
+    }
+
+    // Decode a UTF-8 byte string into Unicode code points. Used to render the
+    // status bar via ncursesw's wide-char API (mvaddnwstr), which places each
+    // glyph in one cell correctly. Writing raw UTF-8 bytes with the narrow
+    // byte-counted mvaddnstr mis-splits multibyte sequences on some terminals
+    // (PuTTY / macOS Terminal over SSH), producing letter/dash garbage.
+    static std::wstring to_wide(const std::string& s) {
+        std::wstring w;
+        for (size_t i = 0; i < s.size();) {
+            size_t n = utf8_len(s, i);
+            wchar_t cp = 0;
+            unsigned char c = static_cast<unsigned char>(s[i]);
+            if (n == 1) {
+                cp = c;
+            } else if (n == 2) {
+                cp = (c & 0x1F);
+            } else if (n == 3) {
+                cp = (c & 0x0F);
+            } else {
+                cp = (c & 0x07);
+            }
+            for (size_t k = 1; k < n; ++k)
+                cp = (cp << 6) | (static_cast<unsigned char>(s[i + k]) & 0x3F);
+            w.push_back(cp);
+            i += n;
+        }
+        return w;
+    }
+
+    static std::string kfmt(long n) { return agent::bar::kfmt(n); }
+
+    static int gauge_pair(double f) {
+        switch (agent::bar::pressure(f)) {
+            case agent::bar::Pressure::Crit: return P_GAUGE_CRIT;
+            case agent::bar::Pressure::Warn: return P_GAUGE_WARN;
+            default:                         return P_GAUGE_OK;
+        }
+    }
+
+    static std::string state_glyph(agent::RunState s) {
+        using S = agent::RunState;
+        switch (s) {
+            case S::Idle:      return "\u25cb idle";
+            case S::Waiting:   return "\u25cc wait";
+            case S::Thinking:  return "\u25d0 think";
+            case S::Streaming: return "\u25cf strm";
+            case S::Tooling:   return "\u25c9 tool";
+            case S::Error:     return "\u25c9 err";
+        }
+        return "\u25cb";
+    }
+
+    static int state_pair(agent::RunState s) {
+        using S = agent::RunState;
+        switch (s) {
+            case S::Thinking:  return P_GAUGE_WARN;
+            case S::Streaming: return P_BAR_DIM;
+            case S::Tooling:   return P_GAUGE_OK;
+            case S::Error:     return P_GAUGE_CRIT;
+            default:           return P_BANNER;
+        }
+    }
+
+    // Assemble the ordered, colored segments for the bar (excluding the clock,
+    // which is pinned right by the drawer). The bar is always fully featured:
+    // every segment is present from launch, showing an em-dash placeholder when
+    // its metric has no data yet, so the layout never shifts on first use.
+    std::vector<Seg> bar_segments() const {
+        std::vector<Seg> segs;
+        segs.push_back({"[" + cfg_.model + "]", P_BANNER, 5});
+        segs.push_back({" " + state_glyph(state_), state_pair(state_), 1});
+
+        if (stats_.latency_ms >= 0) {
+            char b[32];
+            std::snprintf(b, sizeof(b), "  lag %.0fms", stats_.latency_ms);
+            segs.push_back({b, P_BAR_DIM, 6});
+        } else {
+            segs.push_back({"  lag \u2014", P_BAR_DIM, 6});
+        }
+        if (stats_.tps > 0) {
+            char b[32];
+            std::snprintf(b, sizeof(b), "  %.0f t/s", stats_.tps);
+            segs.push_back({b, P_BAR_DIM, 4});
+        } else {
+            segs.push_back({"  \u2014 t/s", P_BAR_DIM, 4});
+        }
+        std::string up = stats_.prompt_tokens >= 0 ? kfmt(stats_.prompt_tokens)
+                                                    : "\u2014";
+        std::string dn = stats_.completion_tokens >= 0
+                             ? kfmt(stats_.completion_tokens) : "\u2014";
+        segs.push_back({"  \u2191" + up + " \u2193" + dn, P_BAR_DIM, 7});
+        return segs;
+    }
+
+    // Render the blue status bar, BitchX-style: ordered colored segments on the
+    // left, a smooth context gauge, and an IRC clock pinned right. Sheds the
+    // lowest-priority segments first when the terminal is too narrow. Cheap
+    // enough to call once a second for the live clock tick.
+    void draw_status_bar(const std::string& tail) {
         int w = width();
         int y = height() - 2;
+
         std::time_t t = std::time(nullptr);
         std::tm tm{};
         localtime_r(&t, &tm);
         char clk[16];
         std::strftime(clk, sizeof(clk), "[%H:%M:%S]", &tm);
         std::string clock = clk;
+        int clock_w = display_cols(clock);
 
+        // Paint the whole bar blue first.
         attron(COLOR_PAIR(P_BANNER));
         mvhline(y, 0, ' ', w);
-        mvaddnstr(y, 0, left.c_str(),
-                  std::max(0, w - static_cast<int>(clock.size()) - 1));
-        if (static_cast<int>(clock.size()) < w)
-            mvaddnstr(y, w - static_cast<int>(clock.size()), clock.c_str(),
-                      static_cast<int>(clock.size()));
         attroff(COLOR_PAIR(P_BANNER));
+
+        std::vector<Seg> segs = bar_segments();
+
+        // Context gauge: always shown when a window size is configured (which it
+        // is by default). Renders an empty gauge until the first usage report.
+        bool have_ctx = (cfg_.context_size > 0);
+        long ctx_used = ctx_used_ >= 0 ? ctx_used_ : 0;
+        double frac = have_ctx
+                          ? static_cast<double>(ctx_used) / cfg_.context_size
+                          : 0.0;
+
+        // Reserve space for clock (right) + optional scroll tail.
+        int right_w = clock_w + 1;
+        int budget = w - right_w;
+        if (budget < 0) budget = 0;
+
+        // Shed highest-drop segments until the fixed text fits, keeping a
+        // reasonable minimum for the gauge if we have one.
+        int gauge_min = have_ctx ? 12 : 0;   // "ctx " + short bar + "%"
+        auto text_cols = [&]() {
+            int c = 0;
+            for (auto& s : segs) c += display_cols(s.text);
+            return c;
+        };
+        while (text_cols() + gauge_min > budget && !segs.empty()) {
+            int worst = -1, worst_i = -1;
+            for (size_t i = 0; i < segs.size(); ++i)
+                if (segs[i].drop > worst) { worst = segs[i].drop; worst_i = (int)i; }
+            if (worst <= 0) break;            // only never-drop segments remain
+            segs.erase(segs.begin() + worst_i);
+        }
+
+        int x = 0;
+        auto put = [&](const std::string& s, int pair) {
+            if (x >= budget) return;
+            std::wstring w = to_wide(s);
+            int room = budget - x;
+            if (static_cast<int>(w.size()) > room) w.resize(room);
+            attron(COLOR_PAIR(pair));
+            mvaddnwstr(y, x, w.c_str(), static_cast<int>(w.size()));
+            attroff(COLOR_PAIR(pair));
+            x += static_cast<int>(w.size());
+            if (x > budget) x = budget;
+        };
+
+        for (auto& s : segs) put(s.text, s.pair);
+
+        // Context gauge, colored by pressure, with sub-cell smooth fill.
+        if (have_ctx && x < budget) {
+            put("  ctx ", P_BAR_DIM);
+            int cells = std::min(24, std::max(6, (budget - x) - 14));
+            if (cells > 0 && x < budget) {
+                put("\u2590", P_BAR_DIM);              // left edge
+                put(agent::bar::gauge_bar(frac, cells), gauge_pair(frac));
+                put("\u258c", P_BAR_DIM);              // right edge
+                char b[48];
+                std::snprintf(b, sizeof(b), " %d%% %s/%s",
+                              static_cast<int>(frac * 100 + 0.5),
+                              kfmt(ctx_used).c_str(),
+                              kfmt(cfg_.context_size).c_str());
+                put(b, gauge_pair(frac));
+            }
+        }
+
+        // Scroll position tail, dim, if it still fits.
+        if (!tail.empty() && x + display_cols(tail) + 1 < budget)
+            put("  " + tail, P_BAR_DIM);
+
+        // Pinned clock, right-aligned (ASCII, but keep the wide path uniform).
+        if (clock_w < w) {
+            std::wstring wc = to_wide(clock);
+            attron(COLOR_PAIR(P_BAR_DIM));
+            mvaddnwstr(y, w - clock_w, wc.c_str(), static_cast<int>(wc.size()));
+            attroff(COLOR_PAIR(P_BAR_DIM));
+        }
     }
 
     // Update only the status bar (for the once-per-second clock tick) without
@@ -313,8 +504,8 @@ private:
         if (!stream_buf_.empty()) total += stream_lines();
         int start = std::min(scroll_top_,
                              std::max(0, total - (height() - 2)));
-        draw_status_bar(" lines:" + std::to_string(total) +
-                        " top:" + std::to_string(start + 1));
+        draw_status_bar("ln " + std::to_string(start + 1) + "/" +
+                        std::to_string(total));
         refresh();
     }
 
@@ -366,13 +557,24 @@ private:
         hooks.on_tool_result = [this](const std::string& n, const agent::ToolResult& r) {
             append_line(P_STATUS, "result:" + n + " " + (r.ok ? r.output : r.error));
         };
+        hooks.on_state = [this](agent::RunState s) {
+            state_ = s;
+            draw();
+        };
+        hooks.on_stats = [this](const agent::Stats& s) {
+            stats_ = s;
+            if (s.prompt_tokens >= 0) ctx_used_ = s.prompt_tokens;
+            draw();
+        };
         try {
             agent::Agent agent(cfg_, reg_, hooks);
             agent.run(prompt);
         } catch (const std::exception& e) {
+            state_ = agent::RunState::Error;
             flush_stream();
             append_line(P_STATUS, std::string("error: ") + e.what());
         }
+        if (state_ != agent::RunState::Error) state_ = agent::RunState::Idle;
         flush_stream();
         draw();
     }
@@ -426,6 +628,7 @@ private:
             "api_key:   " + mask(cfg_.api_key),
             "model:     " + cfg_.model,
             "stream:    " + std::string(cfg_.stream ? "on" : "off"),
+            "context:   " + std::to_string(cfg_.context_size) + " tokens",
             "max_iter:  " + std::to_string(cfg_.max_tool_iterations),
             "system:    " + cfg_.system_prompt_path,
             "tools:     " + cfg_.tools_prompt_path,
@@ -438,12 +641,17 @@ private:
             {"Server URL", cfg_.api_base, false},
             {"Token", cfg_.api_key, true},
             {"Model", cfg_.model, false},
+            {"Context (n_ctx)", std::to_string(cfg_.context_size), false},
         };
         if (!form_edit("Server settings", fields)) return;
 
         cfg_.api_base = fields[0].value;
         cfg_.api_key = fields[1].value;
         cfg_.model = fields[2].value;
+        try {
+            int n = std::stoi(fields[3].value);
+            if (n > 0) cfg_.context_size = n;
+        } catch (...) {}
 
         std::vector<std::string> post = {"Save to " + settings_path_,
                                          "Apply only (don't save)"};
@@ -463,6 +671,7 @@ private:
         f << "api_base=" << cfg_.api_base << "\n";
         f << "api_key=" << cfg_.api_key << "\n";
         f << "model=" << cfg_.model << "\n";
+        f << "context_size=" << cfg_.context_size << "\n";
         f << "system_prompt=" << cfg_.system_prompt_path << "\n";
         f << "tools_prompt=" << cfg_.tools_prompt_path << "\n";
     }
@@ -478,6 +687,11 @@ private:
     std::string reason_buf_;        // live thinking text, before folding
     bool reason_folded_ = false;    // collapsed to a summary line yet?
     bool show_reasoning_ = true;    // toggle live thinking display
+
+    // ---- BitchX-style status bar state ----------------------------------
+    agent::RunState state_ = agent::RunState::Idle;  // live activity
+    agent::Stats stats_;            // last-request telemetry (latency/tps/tokens)
+    long ctx_used_ = -1;            // prompt_tokens of the last request
 };
 
 } // namespace

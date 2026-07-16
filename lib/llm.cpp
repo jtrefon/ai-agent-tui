@@ -56,6 +56,11 @@ json LLMClient::build_body(const std::vector<Message>& messages,
         {"messages", json::array()}
     };
 
+    // Ask the server to emit a final usage chunk during streaming so we can show
+    // context usage and token counts (Qwen/llama.cpp/vLLM honour this).
+    if (stream)
+        body["stream_options"] = {{"include_usage", true}};
+
     // Qwen-style thinking control for servers using the model's native jinja
     // chat template (llama.cpp --jinja). The template reads enable_thinking (and
     // an optional thinking_budget) from chat_template_kwargs.
@@ -104,7 +109,8 @@ json LLMClient::build_body(const std::vector<Message>& messages,
 }
 
 Message LLMClient::chat(const std::vector<Message>& messages,
-                        const std::vector<Tool*>& tools) {
+                        const std::vector<Tool*>& tools,
+                        Stats* stats) {
     json body = build_body(messages, tools, false);
     std::string payload = body.dump();
     debug_log(cfg_.debug_log, "request", payload);
@@ -128,6 +134,9 @@ Message LLMClient::chat(const std::vector<Message>& messages,
     curl_easy_setopt(c, CURLOPT_TIMEOUT, 120L);
 
     CURLcode rc = curl_easy_perform(c);
+    double ttfb = 0, total = 0;
+    curl_easy_getinfo(c, CURLINFO_STARTTRANSFER_TIME, &ttfb);
+    curl_easy_getinfo(c, CURLINFO_TOTAL_TIME, &total);
     curl_slist_free_all(headers);
     curl_easy_cleanup(c);
     if (rc != CURLE_OK) {
@@ -152,6 +161,21 @@ Message LLMClient::chat(const std::vector<Message>& messages,
     }
     if (msg.contains("tool_calls") && !msg["tool_calls"].is_null())
         out.tool_calls = msg["tool_calls"];
+
+    if (stats) {
+        stats->valid = true;
+        stats->latency_ms = ttfb * 1000.0;
+        if (resp.contains("usage") && resp["usage"].is_object()) {
+            const json& u = resp["usage"];
+            if (u.contains("prompt_tokens") && u["prompt_tokens"].is_number())
+                stats->prompt_tokens = u["prompt_tokens"].get<long>();
+            if (u.contains("completion_tokens") && u["completion_tokens"].is_number())
+                stats->completion_tokens = u["completion_tokens"].get<long>();
+        }
+        double gen = total - ttfb;
+        if (stats->completion_tokens > 0 && gen > 0.0)
+            stats->tps = stats->completion_tokens / gen;
+    }
     return out;
 }
 
@@ -171,6 +195,9 @@ struct StreamState {
     bool in_think = false;
     std::string pending;                 // holds a possible partial tag boundary
     bool finished = false;               // guards against double finalize
+
+    long prompt_tokens = -1;            // from the final usage chunk
+    long completion_tokens = -1;
 };
 
 // Route a run of normal "content" text through <think> segmentation, appending
@@ -237,7 +264,18 @@ void dispatch_event(StreamState& st, const std::string& data) {
         return;
     }
     json evt = json::parse(data, nullptr, false);
-    if (evt.is_discarded() || !evt.contains("choices") || evt["choices"].empty())
+    if (evt.is_discarded()) return;
+
+    // The include_usage final chunk carries usage and often an empty choices[].
+    if (evt.contains("usage") && evt["usage"].is_object()) {
+        const json& u = evt["usage"];
+        if (u.contains("prompt_tokens") && u["prompt_tokens"].is_number())
+            st.prompt_tokens = u["prompt_tokens"].get<long>();
+        if (u.contains("completion_tokens") && u["completion_tokens"].is_number())
+            st.completion_tokens = u["completion_tokens"].get<long>();
+    }
+
+    if (!evt.contains("choices") || evt["choices"].empty())
         return;
     const json& delta = evt["choices"][0].value("delta", json::object());
     StreamChunk chunk;
@@ -311,7 +349,8 @@ size_t stream_write_cb(void* ptr, size_t size, size_t nmemb, void* user) {
 Message LLMClient::chat_stream(
     const std::vector<Message>& messages,
     const std::vector<Tool*>& tools,
-    const std::function<void(const StreamChunk&)>& on_chunk) {
+    const std::function<void(const StreamChunk&)>& on_chunk,
+    Stats* stats) {
     json body = build_body(messages, tools, true);
     std::string payload = body.dump();
     debug_log(cfg_.debug_log, "request-stream", payload);
@@ -345,7 +384,10 @@ Message LLMClient::chat_stream(
 
     CURLcode rc = curl_easy_perform(c);
     long status = 0;
+    double ttfb = 0, total = 0;
     curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &status);
+    curl_easy_getinfo(c, CURLINFO_STARTTRANSFER_TIME, &ttfb);
+    curl_easy_getinfo(c, CURLINFO_TOTAL_TIME, &total);
     curl_slist_free_all(headers);
     curl_easy_cleanup(c);
     if (rc != CURLE_OK) {
@@ -361,6 +403,16 @@ Message LLMClient::chat_stream(
     // Safety net: some servers close the stream without a [DONE] marker, which
     // would otherwise leave the boundary-lookahead tail unflushed (truncation).
     finalize_stream(st);
+
+    if (stats) {
+        stats->valid = true;
+        stats->latency_ms = ttfb * 1000.0;
+        stats->prompt_tokens = st.prompt_tokens;
+        stats->completion_tokens = st.completion_tokens;
+        double gen = total - ttfb;
+        if (stats->completion_tokens > 0 && gen > 0.0)
+            stats->tps = stats->completion_tokens / gen;
+    }
     return out;
 }
 

@@ -33,6 +33,11 @@ struct Config {
     int thinking_budget = -1;
     bool show_reasoning = true;          // render thinking live in the UI
 
+    // Model context window (n_ctx) in tokens. Used by UIs to render a
+    // context-usage gauge (prompt_tokens vs this). Servers rarely advertise it,
+    // so it is user-configured. <=0 hides the gauge. Env: CPP_AGENT_CONTEXT.
+    int context_size = 8192;
+
     // Compatibility fallback for OpenAI o-series / vLLM style servers that use
     // the reasoning_effort field instead of a jinja kwarg: "off" disables it.
     std::string reasoning_effort = "off";

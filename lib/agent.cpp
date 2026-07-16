@@ -70,21 +70,32 @@ std::string Agent::run(const std::string& user_prompt) {
     for (const auto& t : registry_.tools()) tools.push_back(t.get());
 
     std::string final_reply;
+    auto set_state = [this](RunState s) { if (hooks_.on_state) hooks_.on_state(s); };
 
     for (int iter = 0; iter < cfg_.max_tool_iterations; ++iter) {
         Message reply;
+        Stats stats;
+        set_state(RunState::Waiting);
         if (cfg_.stream) {
+            bool seen = false;
             reply = client_.chat_stream(history_, tools,
-                [this](const StreamChunk& ch) {
+                [this, &set_state, &seen](const StreamChunk& ch) {
                     if (ch.done) return;
-                    if (!ch.reasoning.empty() && hooks_.on_reasoning)
-                        hooks_.on_reasoning(ch.reasoning);
-                    if (!ch.delta.empty() && hooks_.on_token)
-                        hooks_.on_token(ch.delta);
-                });
+                    if (!ch.reasoning.empty()) {
+                        set_state(RunState::Thinking);
+                        if (hooks_.on_reasoning) hooks_.on_reasoning(ch.reasoning);
+                    }
+                    if (!ch.delta.empty()) {
+                        set_state(RunState::Streaming);
+                        seen = true;
+                        if (hooks_.on_token) hooks_.on_token(ch.delta);
+                    }
+                }, &stats);
+            (void)seen;
         } else {
-            reply = client_.chat(history_, tools);
+            reply = client_.chat(history_, tools, &stats);
         }
+        if (stats.valid && hooks_.on_stats) hooks_.on_stats(stats);
 
         // Persist the assistant turn (including any tool_calls).
         history_.push_back(reply);
@@ -92,6 +103,7 @@ std::string Agent::run(const std::string& user_prompt) {
             log_.event("reasoning", {{"content", reply.reasoning}});
 
         if (reply.content.empty() && !reply.tool_calls.is_null()) {
+            set_state(RunState::Tooling);
             if (hooks_.on_status) hooks_.on_status("assistant requested tools");
             // Dispatch each tool call.
             for (const auto& call : reply.tool_calls) {
@@ -153,6 +165,7 @@ std::string Agent::run(const std::string& user_prompt) {
         log_.event("error", {{"reason", "max_tool_iterations"}});
     }
     log_.event("turn_end", {{"content", final_reply}});
+    set_state(RunState::Idle);
     return final_reply;
 }
 
