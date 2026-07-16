@@ -109,15 +109,48 @@ private:
     // Wrap `text` into display lines: honour embedded newlines, then word-wrap
     // each paragraph to `w` columns (falling back to hard splits for words
     // longer than the width). Tabs are expanded to spaces.
+    // Byte length of the UTF-8 sequence starting at s[i] (1 on invalid lead).
+    static size_t utf8_len(const std::string& s, size_t i) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        size_t n = (c < 0x80) ? 1 : (c >> 5) == 0x6 ? 2
+                 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 1;
+        // Validate continuation bytes; treat a truncated sequence as 1 byte.
+        for (size_t k = 1; k < n; ++k)
+            if (i + k >= s.size() ||
+                (static_cast<unsigned char>(s[i + k]) & 0xC0) != 0x80)
+                return 1;
+        return n;
+    }
+
     static std::vector<std::string> wrap_text(const std::string& text, int w) {
         if (w <= 0) w = 80;
         std::vector<std::string> out;
+        // Sanitize: expand tabs, drop CR, strip ANSI/control bytes that would
+        // otherwise be written raw to the terminal (garbage on screen), while
+        // preserving valid multibyte UTF-8 (emoji/CJK) intact.
         std::string src;
         src.reserve(text.size());
-        for (char c : text) {
-            if (c == '\t') src += "    ";
-            else if (c == '\r') continue;
-            else src += c;
+        for (size_t i = 0; i < text.size();) {
+            unsigned char c = static_cast<unsigned char>(text[i]);
+            if (c == '\t') { src += "    "; ++i; continue; }
+            if (c == '\n') { src += '\n'; ++i; continue; }
+            if (c == 0x1b) {                       // ESC: skip a CSI/simple seq
+                ++i;
+                if (i < text.size() && text[i] == '[') {
+                    ++i;
+                    while (i < text.size() &&
+                           !(text[i] >= '@' && text[i] <= '~')) ++i;
+                    if (i < text.size()) ++i;      // final byte
+                } else if (i < text.size()) {
+                    ++i;
+                }
+                continue;
+            }
+            if (c < 0x20 || c == 0x7f) { ++i; continue; }  // other control chars
+            size_t n = utf8_len(text, i);
+            if (n == 1 && c >= 0x80) { src += '?'; ++i; continue; } // bad byte
+            src.append(text, i, n);
+            i += n;
         }
         size_t start = 0;
         while (start <= src.size()) {
@@ -131,19 +164,27 @@ private:
             } else {
                 size_t p = 0;
                 while (p < para.size()) {
-                    size_t remain = para.size() - p;
-                    if (static_cast<int>(remain) <= w) {
+                    // Walk forward up to `w` display columns, counting whole
+                    // UTF-8 characters (each counted as one column) so we never
+                    // slice through a multibyte sequence.
+                    size_t q = p;
+                    int cols = 0;
+                    while (q < para.size() && cols < w) {
+                        q += utf8_len(para, q);
+                        ++cols;
+                    }
+                    if (q >= para.size()) {
                         out.push_back(para.substr(p));
                         break;
                     }
-                    // find a space to break on within [p, p+w]
-                    size_t brk = para.rfind(' ', p + w);
+                    // find a space to break on within [p, q]
+                    size_t brk = para.rfind(' ', q);
                     if (brk == std::string::npos || brk <= p) {
-                        out.push_back(para.substr(p, w));   // hard split
-                        p += w;
+                        out.push_back(para.substr(p, q - p));  // hard split
+                        p = q;
                     } else {
                         out.push_back(para.substr(p, brk - p));
-                        p = brk + 1;                        // skip the space
+                        p = brk + 1;                           // skip the space
                     }
                 }
             }
