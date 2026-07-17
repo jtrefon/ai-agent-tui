@@ -76,7 +76,7 @@ const Window& Tui::win() const { return *windows_[active_]; }
 
 // ---- thread / event machinery -------------------------------------------
 
-void Tui::drain_events() {
+bool Tui::drain_events() {
     std::vector<AgentEvent> batch;
     {
         std::lock_guard<std::mutex> lk(event_mtx_);
@@ -85,6 +85,8 @@ void Tui::drain_events() {
             event_queue_.pop();
         }
     }
+
+    if (batch.empty()) return false;
 
     for (auto& ev : batch) {
         switch (ev.type) {
@@ -151,9 +153,10 @@ void Tui::drain_events() {
             if (ev.approval_promise)
                 ev.approval_promise->set_value(d);
             break;
-        }
+            }
         }
     }
+    return true;
 }
 
 void Tui::send_async(const std::string& prompt) {
@@ -293,12 +296,18 @@ void Tui::run() {
 
     std::string input;
     while (!quit_) {
-        drain_events();
-        draw();
-        draw_input(input);
+        bool had_events = drain_events();
 
         int ch = getch();
-        if (ch == ERR) continue;
+        if (ch == ERR) {
+            if (had_events) {
+                draw();
+            } else {
+                tick_clock();
+            }
+            draw_input(input);
+            continue;
+        }
         if (ch == 14) {
             if (agent_busy_.load()) continue;
             new_window("chat");

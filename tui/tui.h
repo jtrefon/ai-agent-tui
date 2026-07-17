@@ -75,7 +75,7 @@ public:
 
 private:
     // ---- thread / event machinery ---------------------------------------
-    void drain_events();       // pop and process all pending events
+    bool drain_events();       // pop and process all pending events
     void send_async(const std::string& prompt);
     void agent_worker(const std::string& prompt);
 

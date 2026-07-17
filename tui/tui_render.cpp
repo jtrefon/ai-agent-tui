@@ -5,7 +5,6 @@
 #include "welcome.h"
 
 #include <algorithm>
-#include <cmath>
 #include <ctime>
 
 namespace tui {
@@ -185,39 +184,28 @@ void Tui::draw() {
 }
 
 // ---- animated traveling gradient -----------------------------------------
-namespace {
-constexpr int kGradLen = 14;
-bool grad_init = false;
-
-void init_grad() {
-    if (grad_init) return;
-    grad_init = true;
-    for (int i = 0; i < 8; ++i) {
-        int v = 400 + i * 80;
-        if (v > 1000) v = 1000;
-        init_color(200 + i, 0, v, v);
-        init_pair(P_GRAD + i, 200 + i, 200 + i);
-    }
-}
-} // namespace
-
-// Draw a traveling-brightness wave on the status bar. Returns the next col.
+// Animated travelling pulse on the status bar. Uses only attribute
+// variations (A_BOLD / A_NORMAL / A_DIM) on the existing P_BAR_DIM pair
+// so no extra colour pairs are needed and the look stays in-theme.
 int Tui::draw_gradient(int y, int x) {
     if (state_ == agent::RunState::Idle || state_ == agent::RunState::Error) {
         anim_phase_ = 0;
         return x;
     }
-    init_grad();
     ++anim_phase_;
-    for (int i = 0; i < kGradLen; ++i) {
-        int idx = (anim_phase_ + i) % (kGradLen * 2 - 2);
-        int shade = idx < kGradLen ? idx : (kGradLen * 2 - 2 - idx);
-        if (shade >= 8) shade = 7;
-        wattron(stdscr, COLOR_PAIR(P_GRAD + shade));
+    constexpr int W = 10;
+    for (int i = 0; i < W; ++i) {
+        int center = anim_phase_ % (W * 2 - 2);
+        if (center >= W) center = W * 2 - 2 - center;
+        int dist = std::abs(i - center);
+        chtype attr = COLOR_PAIR(P_BAR_DIM);
+        if (dist == 0)       attr |= A_BOLD;
+        else if (dist > 2)   attr |= A_DIM;
+        wattron(stdscr, attr);
         mvaddch(y, x + i, ' ');
-        wattroff(stdscr, COLOR_PAIR(P_GRAD + shade));
+        wattroff(stdscr, attr);
     }
-    return x + kGradLen;
+    return x + W;
 }
 
 void Tui::draw_status_bar(const std::string& tail) {

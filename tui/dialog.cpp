@@ -17,7 +17,7 @@ void init_pairs() {
     init_pair(P_FIELD_ACT,  COLOR_WHITE,  COLOR_BLACK);
     init_pair(P_DIALOG,     COLOR_WHITE,  COLOR_BLUE);
     init_pair(P_BUTTON,     COLOR_BLACK,  COLOR_WHITE);
-    init_pair(P_BUTTON_ACT, COLOR_WHITE,  COLOR_MAGENTA);
+    init_pair(P_BUTTON_ACT, COLOR_WHITE, COLOR_YELLOW);
     init_pair(P_SHADOW,     COLOR_BLACK,  COLOR_BLACK);
     init_pair(P_GAUGE_OK,   COLOR_GREEN,   COLOR_BLUE);
     init_pair(P_GAUGE_WARN, COLOR_YELLOW,  COLOR_BLUE);
