@@ -10,6 +10,10 @@
 
 namespace agent {
 
+// Operational mode: controls tool availability, approval policy, and
+// orchestration depth. Switchable at runtime via /mode.
+enum class AgentMode { Read, Write, Yolo };
+
 // Runtime configuration for the harness. Sourced from command-line flags,
 // environment variables, and an optional config file. The library layer is
 // intentionally free of any UI concerns.
@@ -23,6 +27,12 @@ struct Config {
     double temperature = 0.2;
     size_t max_tokens = 4096;
     bool stream = true;                  // use SSE streaming when supported
+
+    // Agent mode: controls tool availability and approval policy.
+    //   read  — only observation tools (search, grep, read)
+    //   write — all tools, approval gated
+    //   yolo  — all tools, auto-approve
+    AgentMode mode = AgentMode::Write;
 
     // Thinking / reasoning control for Qwen-style models served with a native
     // jinja chat template (llama.cpp --jinja). The template exposes an

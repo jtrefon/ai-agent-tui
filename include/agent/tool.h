@@ -42,6 +42,11 @@ public:
     // tools that opt in here.
     virtual bool requires_approval() const { return false; }
 
+    // Whether this tool is read-only (safe to run in read mode).
+    // Read tools (search, grep, read) return true; write tools (write, edit,
+    // bash) return false. In read mode, only read-only tools are dispatched.
+    virtual bool is_read_only() const { return false; }
+
     // A short, human-readable summary of what this specific invocation will do,
     // shown in approval prompts (e.g. the command line for a shell tool).
     // Defaults to the tool name; override to surface the concrete action.

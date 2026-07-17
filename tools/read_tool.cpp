@@ -19,6 +19,8 @@ class ReadTool : public Tool {
 public:
     std::string name() const override { return "read"; }
 
+    bool is_read_only() const override { return true; }
+
     std::string description() const override {
         return "Read a text file with pagination. Returns lines [offset, "
                "offset+limit) and reports whether more lines follow so the "

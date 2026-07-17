@@ -110,6 +110,19 @@ void Tui::toggle_thinking() {
     draw();
 }
 
+void Tui::cmd_mode(const std::string& arg) {
+    if (arg == "read") cfg_.mode = agent::AgentMode::Read;
+    else if (arg == "write") cfg_.mode = agent::AgentMode::Write;
+    else if (arg == "yolo") cfg_.mode = agent::AgentMode::Yolo;
+    else {
+        append_line(P_STATUS, "usage: /mode read|write|yolo");
+        return;
+    }
+    std::string label = (arg == "read" ? "read" : arg == "write" ? "write" : "yolo");
+    append_line(P_STATUS, "mode: " + label);
+    draw();
+}
+
 const std::vector<Command>& Tui::commands() {
     if (commands_.empty()) build_commands();
     return commands_;
@@ -129,6 +142,9 @@ void Tui::build_commands() {
         {"think", {"reasoning"}, "",
          "toggle live thinking/reasoning display",
          [this](const std::string&) { toggle_thinking(); }},
+        {"mode", {}, "read|write|yolo",
+         "set agent mode: read (safe), write (normal), yolo (trusted)",
+         [this](const std::string& a) { cmd_mode(a); }},
         {"new", {}, "",
          "open a new chat window",
          [this](const std::string&) { new_window("chat"); draw(); }},

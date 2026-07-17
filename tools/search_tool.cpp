@@ -26,6 +26,8 @@ class SearchTool : public Tool {
 public:
     std::string name() const override { return "search"; }
 
+    bool is_read_only() const override { return true; }
+
     std::string description() const override {
         return "Search the codebase. The default mode runs a regex search "
                "(grep). Set mode=\"semantic\" for meaning-based ranking over an "

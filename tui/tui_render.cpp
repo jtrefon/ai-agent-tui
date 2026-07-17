@@ -85,6 +85,16 @@ std::vector<Tui::Seg> Tui::bar_segments() const {
     segs.push_back({wtag, P_BANNER, 3});
     segs.push_back({" [" + cfg_.model + "]", P_BANNER, 5});
 
+    // Agent mode tag: [R], [W], [Y]
+    std::string mode_txt;
+    int mode_pair = P_BAR_DIM;
+    switch (cfg_.mode) {
+        case agent::AgentMode::Read:  mode_txt = " [R]"; mode_pair = P_GAUGE_OK; break;
+        case agent::AgentMode::Write: mode_txt = " [W]"; mode_pair = P_BANNER; break;
+        case agent::AgentMode::Yolo:  mode_txt = " [Y]"; mode_pair = P_GAUGE_CRIT; break;
+    }
+    segs.push_back({mode_txt, mode_pair, 2});
+
     if (stats_.latency_ms >= 0) {
         char b[32];
         std::snprintf(b, sizeof(b), "  lag %.0fms", stats_.latency_ms);

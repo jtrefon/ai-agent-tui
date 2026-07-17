@@ -47,6 +47,24 @@ void Agent::ensure_system_prompt() {
     else if (!registry_.empty())
         system += "\n\n" + render_tools_markdown(registry_);
 
+    // Mode-specific system instruction
+    switch (cfg_.mode) {
+    case agent::AgentMode::Read:
+        system += "\n\nYou are in READ mode. You can only use read-only tools "
+                 "(search, grep, read). Writing files or running shell commands "
+                 "is disallowed. Answer questions about the codebase but do not "
+                 "make changes.";
+        break;
+    case agent::AgentMode::Yolo:
+        system += "\n\nYou are in YOLO mode. All tools are auto-approved and "
+                 "execute immediately. Be thorough but efficient; the user trusts "
+                 "you to make the right decisions.";
+        break;
+    case agent::AgentMode::Write:
+    default:
+        break;
+    }
+
     Message sys_msg;
     sys_msg.role = "system";
     sys_msg.content = system;
@@ -84,7 +102,14 @@ void Agent::dispatch_tool_calls(const json& calls, std::vector<Tool*>&) {
         if (!tool) {
             res.ok = false;
             res.error = "unknown tool: " + fn;
+        } else if (cfg_.mode == agent::AgentMode::Read && !tool->is_read_only()) {
+            res.ok = false;
+            res.error = "tool \"" + fn + "\" is not available in read mode "
+                        "(switch to /write or /yolo)";
+            log_.event("tool_denied", {{"name", fn}, {"id", id},
+                                       {"reason", "read_mode"}});
         } else if (tool->requires_approval() && !session_approved_.count(fn) &&
+                   cfg_.mode != agent::AgentMode::Yolo &&
                    !approve_call(*tool, args)) {
             // Denied (or no approval handler installed). Report back so the
             // model can adapt instead of silently failing.
