@@ -183,34 +183,6 @@ void Tui::draw() {
     refresh();
 }
 
-// ---- animated traveling gradient -----------------------------------------
-// Animated travelling pulse on the status bar. Uses only attribute
-// variations (A_BOLD / A_NORMAL / A_DIM) on the existing P_BAR_DIM pair
-// so no extra colour pairs are needed and the look stays in-theme.
-int Tui::draw_gradient(int y, int x) {
-    if (state_ == agent::RunState::Idle || state_ == agent::RunState::Error) {
-        anim_phase_ = 0;
-        return x;
-    }
-    ++anim_phase_;
-    constexpr int W = 10;
-    for (int i = 0; i < W; ++i) {
-        int center = anim_phase_ % (W * 2 - 2);
-        if (center >= W) center = W * 2 - 2 - center;
-        int dist = std::abs(i - center);
-        // A_REVERSE swaps fg/bg so the background becomes cyan — visible
-        // against the blue status bar. A space with a non-default background
-        // renders as a solid colour block.
-        chtype attr = COLOR_PAIR(P_BAR_DIM) | A_REVERSE;
-        if (dist == 0)       attr |= A_BOLD;
-        else if (dist > 2)   attr |= A_DIM;
-        wattron(stdscr, attr);
-        mvaddch(y, x + i, ' ');
-        wattroff(stdscr, attr);
-    }
-    return x + W;
-}
-
 void Tui::draw_status_bar(const std::string& tail) {
     int w = width();
     int y = height() - 2;
@@ -293,9 +265,6 @@ void Tui::draw_status_bar(const std::string& tail) {
         mvaddnwstr(y, w - clock_w, wc.c_str(), static_cast<int>(wc.size()));
         attroff(COLOR_PAIR(P_BAR_DIM));
     }
-
-    // Traveling gradient indicator (visible when agent is active)
-    draw_gradient(y, 12);
 }
 
 void Tui::tick_clock() {
@@ -311,14 +280,54 @@ void Tui::tick_clock() {
 void Tui::draw_input(const std::string& s) {
     draw_drawer(s);
     int y = height() - 1;
+    int w = width();
     move(y, 0);
     clrtoeol();
-    attron(COLOR_PAIR(P_USER));
+
+    // Fixed indicator frame at a dedicated position: [ idle ].
+    // When the agent is active the frame shows a traveling brightness
+    // wave using A_BOLD/A_DIM on the default fg (white → gray shades).
     const std::string kPrompt = "amber> ";
-    std::string shown = kPrompt + s;
-    mvaddnstr(y, 0, shown.c_str(), width());
+    constexpr int kIW = 10;           // indicator inner width
+    int ix = display_cols(kPrompt);   // indicator starts right after prompt
+    int tx = ix + kIW + 2;            // user text starts after "] "
+
+    // Prompt
+    attron(COLOR_PAIR(P_USER));
+    mvaddnstr(y, 0, kPrompt.c_str(), w);
+
+    // Frame brackets
+    mvaddch(y, ix, '[');
+    mvaddch(y, ix + kIW + 1, ']');
+
+    if (agent_busy_.load()) {
+        ++anim_phase_;
+        for (int i = 0; i < kIW; ++i) {
+            int c = anim_phase_ % (kIW * 2 - 2);
+            if (c >= kIW) c = kIW * 2 - 2 - c;
+            int d = std::abs(i - c);
+            // Three white/gray shades via attribute only (no color pair)
+            chtype a = A_NORMAL;
+            if (d == 0)            a = A_BOLD;
+            else if (d <= 2)       a = A_NORMAL;
+            else                   a = A_DIM;
+            mvaddch(y, ix + 1 + i, '|' | a);
+        }
+        attron(COLOR_PAIR(P_USER));
+    } else {
+        // Show "idle" centered in the frame
+        attron(A_DIM);
+        mvaddstr(y, ix + 1, "  idle   ");
+        attroff(A_DIM);
+    }
+
+    // User input text after the indicator
+    attron(COLOR_PAIR(P_USER));
+    mvaddnstr(y, tx, s.c_str(), w - tx);
     attroff(COLOR_PAIR(P_USER));
-    int cx = std::min(display_cols(shown), width() - 1);
+
+    // Cursor at end of user text
+    int cx = std::min(tx + display_cols(s), w - 1);
     curs_set(1);
     move(y, cx);
     refresh();
