@@ -240,6 +240,32 @@ void Tui::draw_status_bar(const std::string& tail) {
 
     for (auto& s : segs) put(s.text, s.pair);
 
+    // Framed activity indicator on the status bar: [ idle ] when idle,
+    // traveling brightness wave when the agent is running.
+    if (x + 14 < budget) {
+        put("[", P_BAR_DIM);
+        if (agent_busy_.load()) {
+            ++anim_phase_;
+            for (int i = 0; i < 10; ++i) {
+                if (x >= budget) break;
+                int c = anim_phase_ % 18;
+                if (c >= 10) c = 18 - c;
+                int d = std::abs(i - c);
+                chtype a = COLOR_PAIR(P_BAR_DIM);
+                if (d == 0)      a |= A_BOLD;
+                else if (d > 2)  a |= A_DIM;
+                wattron(stdscr, a);
+                mvaddch(y, x, '|');
+                wattroff(stdscr, a);
+                ++x;
+            }
+        } else {
+            anim_phase_ = 0;
+            put("  idle   ", P_BAR_DIM);
+        }
+        put("]", P_BAR_DIM);
+    }
+
     if (have_ctx && x < budget) {
         put("  ctx ", P_BAR_DIM);
         int cells = std::min(24, std::max(6, (budget - x) - 14));
@@ -280,54 +306,14 @@ void Tui::tick_clock() {
 void Tui::draw_input(const std::string& s) {
     draw_drawer(s);
     int y = height() - 1;
-    int w = width();
     move(y, 0);
     clrtoeol();
-
-    // Fixed indicator frame at a dedicated position: [ idle ].
-    // When the agent is active the frame shows a traveling brightness
-    // wave using A_BOLD/A_DIM on the default fg (white → gray shades).
+    attron(COLOR_PAIR(P_USER));
     const std::string kPrompt = "amber> ";
-    constexpr int kIW = 10;           // indicator inner width
-    int ix = display_cols(kPrompt);   // indicator starts right after prompt
-    int tx = ix + kIW + 2;            // user text starts after "] "
-
-    // Prompt
-    attron(COLOR_PAIR(P_USER));
-    mvaddnstr(y, 0, kPrompt.c_str(), w);
-
-    // Frame brackets
-    mvaddch(y, ix, '[');
-    mvaddch(y, ix + kIW + 1, ']');
-
-    if (agent_busy_.load()) {
-        ++anim_phase_;
-        for (int i = 0; i < kIW; ++i) {
-            int c = anim_phase_ % (kIW * 2 - 2);
-            if (c >= kIW) c = kIW * 2 - 2 - c;
-            int d = std::abs(i - c);
-            // Three white/gray shades via attribute only (no color pair)
-            chtype a = A_NORMAL;
-            if (d == 0)            a = A_BOLD;
-            else if (d <= 2)       a = A_NORMAL;
-            else                   a = A_DIM;
-            mvaddch(y, ix + 1 + i, '|' | a);
-        }
-        attron(COLOR_PAIR(P_USER));
-    } else {
-        // Show "idle" centered in the frame
-        attron(A_DIM);
-        mvaddstr(y, ix + 1, "  idle   ");
-        attroff(A_DIM);
-    }
-
-    // User input text after the indicator
-    attron(COLOR_PAIR(P_USER));
-    mvaddnstr(y, tx, s.c_str(), w - tx);
+    std::string shown = kPrompt + s;
+    mvaddnstr(y, 0, shown.c_str(), width());
     attroff(COLOR_PAIR(P_USER));
-
-    // Cursor at end of user text
-    int cx = std::min(tx + display_cols(s), w - 1);
+    int cx = std::min(display_cols(shown), width() - 1);
     curs_set(1);
     move(y, cx);
     refresh();
