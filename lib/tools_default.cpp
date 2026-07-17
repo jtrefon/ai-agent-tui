@@ -14,6 +14,7 @@ void register_default_tools(ToolRegistry& reg) {
     reg.register_tool(make_read_tool());
     reg.register_tool(make_write_tool());
     reg.register_tool(make_search_tool());
+    reg.register_tool(make_bash_tool());
 }
 
 } // namespace agent

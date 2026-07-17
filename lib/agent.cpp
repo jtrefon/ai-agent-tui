@@ -67,8 +67,21 @@ void Agent::set_history(std::vector<Message> messages) {
     history_ = std::move(messages);
 }
 
+bool Agent::approve_call(const Tool& tool, const json& args) {
+    // Fail safe: with no approval handler, deny gated tools outright.
+    if (!hooks_.on_approval) return false;
+    std::string summary = tool.summarize(args);
+    Approval d = hooks_.on_approval(tool.name(), args, summary);
+    if (d == Approval::AllowSession) {
+        session_approved_.insert(tool.name());
+        return true;
+    }
+    return d == Approval::AllowOnce;
+}
+
 void Agent::reset() {
     history_.clear();
+    session_approved_.clear();
 }
 
 std::string Agent::run(const std::string& user_prompt) {
@@ -145,6 +158,16 @@ std::string Agent::run(const std::string& user_prompt) {
                 if (!tool) {
                     res.ok = false;
                     res.error = "unknown tool: " + fn;
+                } else if (tool->requires_approval() &&
+                           !session_approved_.count(fn) &&
+                           !approve_call(*tool, args)) {
+                    // Denied (or no approval handler installed). Report back so
+                    // the model can adapt instead of silently failing.
+                    res.ok = false;
+                    res.error = "denied by user: the " + fn +
+                                " tool was not approved to run";
+                    log_.event("tool_denied", {{"name", fn}, {"id", id},
+                                               {"args", args}});
                 } else {
                     try { res = tool->execute(args); }
                     catch (const std::exception& e) {

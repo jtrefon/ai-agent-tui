@@ -14,6 +14,7 @@ namespace agent {
 std::unique_ptr<Tool> make_read_tool();
 std::unique_ptr<Tool> make_write_tool();
 std::unique_ptr<Tool> make_search_tool();
+std::unique_ptr<Tool> make_bash_tool();
 
 } // namespace agent
 

@@ -8,6 +8,7 @@
 #include <functional>
 #include <string>
 #include <fstream>
+#include <set>
 #include "agent/config.h"
 #include "agent/registry.h"
 #include "agent/llm.h"
@@ -43,6 +44,15 @@ enum class RunState {
     Error        // last request failed
 };
 
+// The host's answer when the agent asks permission to run an approval-gated
+// tool (e.g. the shell tool). AllowSession grants the tool for the rest of the
+// conversation; the harness, not the library, remembers that grant.
+enum class Approval {
+    Deny,           // reject this invocation
+    AllowOnce,      // permit just this one call
+    AllowSession    // permit this and future calls of the same tool this session
+};
+
 // A hook invoked on each significant event so UIs can render progress without
 // the library knowing about them. The default no-op is used by headless runs.
 struct AgentHooks {
@@ -54,6 +64,13 @@ struct AgentHooks {
     std::function<void(const std::string&)> on_status;
     std::function<void(RunState)> on_state;                 // activity transitions
     std::function<void(const Stats&)> on_stats;             // per-request telemetry
+
+    // Consulted before running a tool whose requires_approval() is true. Given
+    // the tool name and a human-readable summary of the action, returns the
+    // host's decision. If unset, approval-gated tools are DENIED by default
+    // (fail-safe: a headless run never executes shell commands unattended).
+    std::function<Approval(const std::string& tool, const json& args,
+                           const std::string& summary)> on_approval;
 };
 
 // The core agent loop. Given an initial user prompt it drives the conversation:
@@ -90,12 +107,17 @@ private:
     // Build and push the system message if the conversation is empty. Idempotent.
     void ensure_system_prompt();
 
+    // Ask the host to approve an approval-gated tool call. Returns true if the
+    // call may proceed. Records session-wide grants in session_approved_.
+    bool approve_call(const Tool& tool, const json& args);
+
     Config cfg_;
     ToolRegistry& registry_;
     LLMClient client_;
     AgentHooks hooks_;
     ConversationLog log_;
     std::vector<Message> history_;
+    std::set<std::string> session_approved_;  // tools granted for the session
 };
 
 } // namespace agent

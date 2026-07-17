@@ -35,6 +35,20 @@ public:
     // top-level "description" are filled by the registry from name()/description().
     virtual json parameters_schema() const = 0;
 
+    // Whether invoking this tool requires explicit user approval before it runs.
+    // Side-effecting or dangerous tools (e.g. running shell commands) return
+    // true so the host can gate them behind a confirmation prompt. Read-only
+    // tools stay false. The agent loop consults AgentHooks::on_approval only for
+    // tools that opt in here.
+    virtual bool requires_approval() const { return false; }
+
+    // A short, human-readable summary of what this specific invocation will do,
+    // shown in approval prompts (e.g. the command line for a shell tool).
+    // Defaults to the tool name; override to surface the concrete action.
+    virtual std::string summarize(const json& /*arguments*/) const {
+        return name();
+    }
+
     // Execute with the arguments supplied by the model.
     virtual ToolResult execute(const json& arguments) const = 0;
 };

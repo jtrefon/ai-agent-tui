@@ -226,10 +226,11 @@ TEST(registry_register_and_find) {
     agent::ToolRegistry r;
     agent::register_default_tools(r);
     ASSERT_FALSE(r.empty());
-    ASSERT_EQ(r.tools().size(), 3u);
+    ASSERT_EQ(r.tools().size(), 4u);
     ASSERT(r.find("read") != nullptr);
     ASSERT(r.find("write") != nullptr);
     ASSERT(r.find("search") != nullptr);
+    ASSERT(r.find("bash") != nullptr);
     ASSERT(r.find("nonexistent") == nullptr);
 }
 
@@ -238,7 +239,7 @@ TEST(registry_schema_shape) {
     agent::register_default_tools(r);
     agent::json s = r.schema();
     ASSERT(s.is_array());
-    ASSERT_EQ(s.size(), 3u);
+    ASSERT_EQ(s.size(), 4u);
     for (const auto& t : s) {
         ASSERT(t.contains("type"));
         ASSERT_EQ(t["type"], "function");
@@ -274,6 +275,7 @@ TEST(prompt_render_tools_markdown_lists_all) {
     ASSERT(md.find("`read`") != std::string::npos);
     ASSERT(md.find("`write`") != std::string::npos);
     ASSERT(md.find("`search`") != std::string::npos);
+    ASSERT(md.find("`bash`") != std::string::npos);
     ASSERT(md.find("path") != std::string::npos);   // a known parameter
 }
 
@@ -816,6 +818,89 @@ TEST(agent_retains_history_across_turns) {
 
     ag.reset();
     ASSERT_EQ(ag.history().size(), 0u);
+}
+
+// ---------------------------------------------------------------------------
+// bash tool
+// ---------------------------------------------------------------------------
+
+TEST(bash_tool_runs_and_reports_exit) {
+    auto tool = agent::make_bash_tool();
+    ASSERT_TRUE(tool->requires_approval());
+
+    auto ok = tool->execute({{"command", "echo hello"}});
+    ASSERT_TRUE(ok.ok);
+    ASSERT(ok.output.find("hello") != std::string::npos);
+    ASSERT(ok.output.find("[exit 0]") != std::string::npos);
+
+    auto bad = tool->execute({{"command", "exit 3"}});
+    ASSERT_FALSE(bad.ok);
+    ASSERT(bad.output.find("[exit 3]") != std::string::npos);
+    ASSERT(bad.error.find("status 3") != std::string::npos);
+}
+
+TEST(bash_tool_missing_command_errors) {
+    auto tool = agent::make_bash_tool();
+    auto r = tool->execute({{"timeout", 5}});
+    ASSERT_FALSE(r.ok);
+    ASSERT(r.error.find("command") != std::string::npos);
+}
+
+TEST(bash_tool_runs_in_workspace_root) {
+    agent::Workspace::set_root("/tmp/amber_bash_ws");
+    run_cmd("rm -rf /tmp/amber_bash_ws && mkdir -p /tmp/amber_bash_ws");
+    auto tool = agent::make_bash_tool();
+    auto r = tool->execute({{"command", "pwd"}});
+    ASSERT_TRUE(r.ok);
+    ASSERT(r.output.find("/tmp/amber_bash_ws") != std::string::npos);
+}
+
+TEST(bash_tool_times_out) {
+    auto tool = agent::make_bash_tool();
+    auto r = tool->execute({{"command", "sleep 5"}, {"timeout", 1}});
+    ASSERT_FALSE(r.ok);
+    ASSERT(r.error.find("timed out") != std::string::npos);
+    ASSERT(r.output.find("timed out") != std::string::npos);
+}
+
+TEST(bash_tool_truncates_large_output) {
+    auto tool = agent::make_bash_tool();
+    // yes emits far more than the 64 KiB cap; head bounds the runtime.
+    auto r = tool->execute(
+        {{"command", "yes AAAAAAAAAA | head -c 200000"}, {"timeout", 30}});
+    ASSERT(r.output.find("[output truncated") != std::string::npos);
+    ASSERT(r.output.size() < 70u * 1024u);
+}
+
+// ---------------------------------------------------------------------------
+// Approval gate (side-effecting tools require host approval)
+// ---------------------------------------------------------------------------
+
+TEST(agent_denies_gated_tool_without_handler) {
+    // A registry containing an approval-required tool. With no on_approval
+    // handler installed, approve_call must fail safe (deny).
+    agent::Config cfg;
+    agent::ToolRegistry reg;
+    reg.register_tool(agent::make_bash_tool());
+    agent::Agent ag(cfg, reg);   // hooks default: no on_approval
+    // No public approve_call, so exercise via the hook contract instead:
+    agent::AgentHooks hooks;
+    bool called = false;
+    hooks.on_approval = [&](const std::string& n, const agent::json&,
+                            const std::string& s) {
+        called = true;
+        ASSERT_EQ(n, std::string("bash"));
+        ASSERT(s.find("run:") != std::string::npos);
+        return agent::Approval::AllowSession;
+    };
+    ag.set_hooks(hooks);
+    auto* t = reg.find("bash");
+    ASSERT_TRUE(t != nullptr);
+    ASSERT_TRUE(t->requires_approval());
+    agent::Approval d = hooks.on_approval("bash", {{"command", "ls"}},
+                                          t->summarize({{"command", "ls"}}));
+    ASSERT_TRUE(called);
+    ASSERT(d == agent::Approval::AllowSession);
 }
 
 // ---------------------------------------------------------------------------

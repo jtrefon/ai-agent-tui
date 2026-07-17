@@ -1,9 +1,10 @@
 amber: an AI agent harness for Linux servers
 
 amber is a free-software agent runtime that exposes a small set of
-pre-defined tools (read with pagination, patch-style write, and a search
+pre-defined tools (read with pagination, patch-style write, a search
 tool that starts as a grep wrapper and can grow into indexed / semantic
-search) to an OpenAI-compatible LLM API. System and tool descriptions are
+search, and an approval-gated bash tool for running shell commands) to an
+OpenAI-compatible LLM API. System and tool descriptions are
 written as Markdown prompts. The request is routed to the LLM, which may
 invoke tools; results are fed back until the agent terminates.
 
@@ -21,7 +22,8 @@ Layout:
   src/        amber  — headless CLI client linking libagent.
   tui/        amber-tui — ncurses TUI client linking libagent.
   tools/      the pre-defined tools: read (paginated), write (patch-style),
-              search (pluggable backend: grep or local semantic index).
+              search (pluggable backend: grep or local semantic index),
+              bash (approval-gated shell execution in the workspace).
 
 Building:
   ./configure
@@ -32,6 +34,10 @@ Building:
 Run:
   ./amber --help
   ./amber-tui
+
+  Pass --yes to auto-approve the bash tool for the session (headless CLI);
+  otherwise amber prompts before each shell command on an interactive
+  terminal and denies shell execution when stdin is not a TTY.
 
 Streaming:
   The LLM client supports OpenAI-compatible SSE streaming; token deltas are
@@ -54,6 +60,14 @@ Security model:
   - Search: the grep backend passes the query and root as single-quoted
     arguments (shell metacharacters are neutralized), so a crafted query
     cannot inject shell commands.
+  - Shell execution: the bash tool runs arbitrary commands and is therefore
+    approval-gated. Each call must be approved by the host before it runs; if
+    no approval handler is installed the call is denied (fail-safe). The CLI
+    prompts on a TTY (allow once / allow session / deny) and denies when stdin
+    is not interactive unless --yes is passed; the TUI shows a confirmation
+    dialog. Commands run in their own process group with the working directory
+    set to the workspace root, are killed on timeout (default 60s), and their
+    combined output is capped at 64 KiB.
   - Run the agent as an unprivileged user, ideally in a container or
     dedicated working directory, and review write operations for anything
     you would not run yourself.

@@ -2,9 +2,11 @@
 // Copyright 2026 Jacek Trefon (www.trefon.com)
 
 #include <agent.h>
+#include <cctype>
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <unistd.h>
 
 namespace {
 
@@ -17,6 +19,7 @@ void print_usage(const char* prog) {
               << "  --tools FILE       Tools advertising markdown file\n"
               << "  --config FILE      KEY=VALUE config file\n"
               << "  --prompt TEXT      User prompt (else read from stdin)\n"
+              << "  --yes              Auto-approve tools that need confirmation (e.g. bash)\n"
               << "  -h, --help         Show this help\n";
 }
 
@@ -26,6 +29,7 @@ int main(int argc, char** argv) {
     agent::Config cfg;
     std::string prompt;
     std::string config_file;
+    bool auto_approve = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -40,6 +44,7 @@ int main(int argc, char** argv) {
         else if (a == "--tools")      cfg.tools_prompt_path = next("");
         else if (a == "--config")     config_file = next("");
         else if (a == "--prompt")     prompt = next("");
+        else if (a == "--yes" || a == "--yolo") auto_approve = true;
         else if (a == "-h" || a == "--help") { print_usage(argv[0]); return 0; }
         else if (prompt.empty())      prompt = a;
         else { prompt += " " + a; }
@@ -89,6 +94,28 @@ int main(int argc, char** argv) {
     hooks.on_tool_result = [](const std::string& n, const agent::ToolResult& r) {
         std::cerr << "[result:" << n << "] "
                   << (r.ok ? r.output : r.error) << "\n";
+    };
+    // Approval gate for side-effecting tools (bash). With --yes, grant for the
+    // session. Otherwise prompt on a TTY; if stdin is not interactive, deny
+    // (fail-safe: never run shell commands unattended).
+    bool tty = isatty(STDIN_FILENO);
+    hooks.on_approval = [auto_approve, tty](const std::string&, const agent::json&,
+                                            const std::string& summary) -> agent::Approval {
+        if (auto_approve) return agent::Approval::AllowSession;
+        if (!tty) {
+            std::cerr << "[denied] " << summary
+                      << "  (approval required; re-run with --yes to allow)\n";
+            return agent::Approval::Deny;
+        }
+        std::cerr << "\n[approval] the agent wants to " << summary << "\n"
+                  << "  allow? [y]es once / [a]llow session / [N]o: " << std::flush;
+        std::string line;
+        if (!std::getline(std::cin, line) || line.empty())
+            return agent::Approval::Deny;
+        char c = static_cast<char>(std::tolower(line[0]));
+        if (c == 'y') return agent::Approval::AllowOnce;
+        if (c == 'a') return agent::Approval::AllowSession;
+        return agent::Approval::Deny;
     };
 
     try {
