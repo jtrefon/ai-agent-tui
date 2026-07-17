@@ -4,6 +4,7 @@
 #include "agent.h"
 #include "agent/tools.h"
 #include "agent/search_backend.h"
+#include "tui/textutil.h"
 #include "tests/test_util.h"
 
 #include <cstdio>
@@ -49,6 +50,50 @@ TEST(config_validate_flags_problems) {
     agent::Config trailing;
     trailing.api_base = "http://localhost:8000/v1/";  // trailing slash
     ASSERT_FALSE(trailing.validate().empty());
+}
+
+// ---------------------------------------------------------------------------
+// TUI text utilities (UTF-8 wrapping / width / decoding)
+// ---------------------------------------------------------------------------
+
+TEST(textutil_utf8_len_and_display_cols) {
+    std::string ascii = "hello";
+    ASSERT_EQ(tui::text::utf8_len(ascii, 0), (size_t)1);
+    ASSERT_EQ(tui::text::display_cols(ascii), 5);
+
+    std::string emoji = "a\xF0\x9F\x98\x80z";  // a + U+1F600 + z
+    ASSERT_EQ(tui::text::utf8_len(emoji, 1), (size_t)4);
+    ASSERT_EQ(tui::text::display_cols(emoji), 3);
+
+    // truncated multibyte sequence counts as a single byte
+    std::string bad = "\xF0\x9F";
+    ASSERT_EQ(tui::text::utf8_len(bad, 0), (size_t)1);
+}
+
+TEST(textutil_wrap_respects_width_and_newlines) {
+    auto lines = tui::text::wrap("the quick brown fox", 9);
+    ASSERT_FALSE(lines.empty());
+    for (const auto& l : lines)
+        ASSERT(tui::text::display_cols(l) <= 9);
+
+    auto para = tui::text::wrap("one\ntwo", 40);
+    ASSERT_EQ(para.size(), (size_t)2);
+    ASSERT_EQ(para[0], "one");
+    ASSERT_EQ(para[1], "two");
+}
+
+TEST(textutil_wrap_strips_ansi_and_expands_tabs) {
+    // ANSI color escape should be removed; tab becomes four spaces.
+    auto lines = tui::text::wrap("\x1b[31mred\x1b[0m\tx", 80);
+    ASSERT_EQ(lines.size(), (size_t)1);
+    ASSERT_EQ(lines[0], "red    x");
+}
+
+TEST(textutil_to_wide_decodes_codepoints) {
+    std::wstring w = tui::text::to_wide("a\xF0\x9F\x98\x80");
+    ASSERT_EQ(w.size(), (size_t)2);
+    ASSERT_EQ((long)w[0], (long)'a');
+    ASSERT_EQ((long)w[1], (long)0x1F600);
 }
 
 TEST(config_load_key_value) {
