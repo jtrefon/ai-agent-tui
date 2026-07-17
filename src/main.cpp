@@ -48,6 +48,12 @@ int main(int argc, char** argv) {
     if (!config_file.empty()) cfg.load(config_file);
     cfg.apply_environment();
 
+    if (auto errs = cfg.validate(); !errs.empty()) {
+        std::cerr << "error: invalid configuration:\n";
+        for (const auto& e : errs) std::cerr << "  - " << e << "\n";
+        return 2;
+    }
+
     // Auto-detect model / context window from the server, filling only values
     // the user did not set explicitly.
     {

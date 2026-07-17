@@ -1339,6 +1339,13 @@ int main(int argc, char** argv) {
     }
     cfg.apply_environment();
 
+    if (auto errs = cfg.validate(); !errs.empty()) {
+        std::fprintf(stderr, "error: invalid configuration:\n");
+        for (const auto& e : errs)
+            std::fprintf(stderr, "  - %s\n", e.c_str());
+        return 2;
+    }
+
     if (cfg.system_prompt_path.empty()) cfg.system_prompt_path = "prompts/system.md";
     if (cfg.tools_prompt_path.empty()) cfg.tools_prompt_path = "prompts/tools.md";
 

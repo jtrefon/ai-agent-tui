@@ -6,6 +6,7 @@
 
 #include <string>
 #include <map>
+#include <vector>
 
 namespace agent {
 
@@ -67,6 +68,11 @@ struct Config {
     // (CPP_AGENT_API_BASE, CPP_AGENT_API_KEY, CPP_AGENT_MODEL, ...).
     void load(const std::string& path);
     void apply_environment();
+
+    // Validate the resolved configuration. Returns a list of human-readable
+    // problems; an empty vector means the config is usable. UIs decide how to
+    // surface these (abort with a message, warn, etc.). Kept UI-free here.
+    std::vector<std::string> validate() const;
 
     std::string api_url() const { return api_base + "/chat/completions"; }
     std::string models_url() const { return api_base + "/models"; }

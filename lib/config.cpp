@@ -68,4 +68,39 @@ void Config::apply_environment() {
     if (sr) show_reasoning = (std::string(sr) == "1" || std::string(sr) == "true");
 }
 
+std::vector<std::string> Config::validate() const {
+    std::vector<std::string> errs;
+
+    if (api_base.empty()) {
+        errs.push_back("api_base is empty");
+    } else if (api_base.rfind("http://", 0) != 0 &&
+               api_base.rfind("https://", 0) != 0) {
+        errs.push_back("api_base must start with http:// or https:// (got: " +
+                       api_base + ")");
+    } else if (api_base.back() == '/') {
+        errs.push_back("api_base must not end with a trailing '/' (got: " +
+                       api_base + ")");
+    }
+
+    if (model.empty())
+        errs.push_back("model is empty");
+
+    if (max_tool_iterations < 1)
+        errs.push_back("max_tool_iterations must be >= 1 (got: " +
+                       std::to_string(max_tool_iterations) + ")");
+
+    if (temperature < 0.0 || temperature > 2.0)
+        errs.push_back("temperature must be in [0.0, 2.0] (got: " +
+                       std::to_string(temperature) + ")");
+
+    if (max_tokens == 0)
+        errs.push_back("max_tokens must be > 0");
+
+    if (thinking != "on" && thinking != "off" && thinking != "auto")
+        errs.push_back("thinking must be one of on|off|auto (got: " +
+                       thinking + ")");
+
+    return errs;
+}
+
 } // namespace agent

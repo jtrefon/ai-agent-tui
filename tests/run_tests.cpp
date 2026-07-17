@@ -30,6 +30,27 @@ TEST(config_defaults) {
     ASSERT_EQ(c.api_url(), "http://localhost:8000/v1/chat/completions");
 }
 
+TEST(config_validate_accepts_defaults) {
+    agent::Config c;
+    ASSERT_TRUE(c.validate().empty());
+}
+
+TEST(config_validate_flags_problems) {
+    agent::Config c;
+    c.api_base = "localhost:8000/v1";   // missing scheme
+    c.model = "";                       // empty
+    c.max_tool_iterations = 0;          // too small
+    c.temperature = 5.0;                // out of range
+    c.max_tokens = 0;                   // zero
+    c.thinking = "sometimes";           // invalid enum
+    auto errs = c.validate();
+    ASSERT(errs.size() >= 6);
+
+    agent::Config trailing;
+    trailing.api_base = "http://localhost:8000/v1/";  // trailing slash
+    ASSERT_FALSE(trailing.validate().empty());
+}
+
 TEST(config_load_key_value) {
     std::string path = "/tmp/cpp_agent_cfg_test.txt";
     {
