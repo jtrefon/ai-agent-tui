@@ -403,6 +403,7 @@ void Tui::run() {
         } else if (ch >= 32 && ch <= 126) {
             input += static_cast<char>(ch);
             update_drawer(input);
+            ensure_chat_window();
             draw(); draw_input(input);
         }
     }
