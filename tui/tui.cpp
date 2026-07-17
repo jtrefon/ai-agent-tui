@@ -7,6 +7,7 @@
 #include "textutil.h"
 #include "window.h"
 #include "palette.h"
+#include "welcome.h"
 
 #include <algorithm>
 #include <clocale>
@@ -52,12 +53,12 @@ public:
         noecho();
         keypad(stdscr, TRUE);
         set_escdelay(25);
-        curs_set(0);
+        curs_set(1);          // visible (blinking) cursor; terminal picks style
         start_color();
         use_default_colors();
         tui::init_pairs();
 
-        new_window("chat");   // always have one conversation to talk to
+        open_welcome_window();   // persistent read-only mural = window 1
     }
 
     ~Tui() {
@@ -81,10 +82,33 @@ public:
         return *windows_.back();
     }
 
+    // The persistent read-only welcome window (window 1): shows the retro mural
+    // and stays open until closed. Typing a message here transparently spawns /
+    // switches to a real chat window. Later this window can double as a log pane.
+    Window& open_welcome_window() {
+        auto w = std::make_unique<Window>();
+        w->title = "amber";
+        w->read_only = true;
+        for (const auto& line : tui::welcome::art())
+            w->lines.push_back({P_BANNER, line});
+        windows_.push_back(std::move(w));
+        active_ = windows_.size() - 1;
+        return *windows_.back();
+    }
+
+    // Ensure there is a writable chat window to send into. If the active window
+    // is read-only (the welcome/log pane), find an existing chat window or open
+    // a new one, and make it active. Returns the chat window.
+    Window& ensure_chat_window() {
+        if (!win().read_only) return win();
+        for (size_t i = 0; i < windows_.size(); ++i) {
+            if (!windows_[i]->read_only) { switch_to(i); return win(); }
+        }
+        return new_window("chat");
+    }
+
     void run() {
         draw();
-        banner("amber - F1 help  /help commands  Ctrl-N new win  "
-               "Alt+1..9 switch  Enter send  Ctrl-C quit");
         draw_input("");
         detect_server(false);   // auto-fill model/context from the server
 
@@ -97,15 +121,6 @@ public:
         while (!quit_) {
             int ch = getch();
             if (ch == ERR) { tick_clock(); draw_input(input); continue; }
-            if (ch == KEY_F(1)) { help_screen(); redraw(input); continue; }
-            if (ch == KEY_F(2)) { config_screen(); redraw(input); continue; }
-            if (ch == KEY_F(10)) { settings_screen(); redraw(input); continue; }
-            if (ch == KEY_F(3)) {
-                cfg_.show_reasoning = !cfg_.show_reasoning;
-                append_line(P_STATUS, std::string("thinking display: ") +
-                                          (cfg_.show_reasoning ? "on" : "off"));
-                draw(); draw_input(input); continue;
-            }
             if (ch == 14) {   // Ctrl-N: new window
                 new_window("chat");
                 draw(); draw_input(input); continue;
@@ -178,9 +193,12 @@ public:
                     draw(); draw_input("");
                     continue;
                 }
+                // Typing a message in the read-only welcome/log window opens (or
+                // switches to) a real chat window so the mural stays pristine.
+                ensure_chat_window();
                 append_line(P_USER, "> " + input);
                 input.clear();
-                draw_input("");
+                draw(); draw_input("");
                 send(prompt);
                 draw_input("");
                 continue;
@@ -200,10 +218,10 @@ public:
 private:
     int height() const { int y, x; getmaxyx(stdscr, y, x); (void)x; return y; }
     int width() const { int y, x; getmaxyx(stdscr, y, x); (void)y; return x; }
-    // Layout: row 0 window-tab line, rows 1..H-3 chat, row H-2 status bar,
-    // row H-1 input.
-    int chat_top() const { return 1; }
-    int chat_height() const { return std::max(1, height() - 3); }
+    // Layout (no top bar): rows 0..H-3 chat, row H-2 status bar, row H-1 input.
+    // The window indicator lives in the status bar; the welcome mural is window 1.
+    int chat_top() const { return 0; }
+    int chat_height() const { return std::max(1, height() - 2); }
     int lines_per_page() const { return chat_height(); }
     int stream_lines() const {
         return win().stream_buf.empty()
@@ -270,30 +288,8 @@ private:
         win().scroll_top = max_scroll();
     }
 
-    // Top line: IRC-style window tabs, e.g. "[1:chat][2:bugfix]" with the active
-    // window highlighted. Rendered with the wide-char API for correct columns.
-    void draw_tabs() {
-        move(0, 0);
-        attron(COLOR_PAIR(P_STATUS));
-        for (int i = 0; i < width(); ++i) addch(' ');
-        int col = 0;
-        for (size_t i = 0; i < windows_.size() && col < width(); ++i) {
-            std::string label =
-                "[" + std::to_string(i + 1) + ":" + windows_[i]->title + "]";
-            bool act = (i == active_);
-            if (act) attron(A_REVERSE);
-            std::wstring w = to_wide(label);
-            mvaddnwstr(0, col, w.c_str(),
-                       std::min<int>(w.size(), std::max(0, width() - col)));
-            if (act) attroff(A_REVERSE);
-            col += display_cols(label);
-        }
-        attroff(COLOR_PAIR(P_STATUS));
-    }
-
     void draw() {
         erase();
-        draw_tabs();
         int view_h = chat_height();
 
         // Build the full display list = committed lines + live (uncommitted)
@@ -400,7 +396,14 @@ private:
     // its metric has no data yet, so the layout never shifts on first use.
     std::vector<Seg> bar_segments() const {
         std::vector<Seg> segs;
-        segs.push_back({"[" + cfg_.model + "]", P_BANNER, 5});
+        // Compact window indicator (replaces the old top tab bar): active window
+        // number, its title, and the total count, e.g. "[2:bugfix 2/3]".
+        std::string wtag = "[" + std::to_string(active_ + 1) + ":" +
+                           windows_[active_]->title + " " +
+                           std::to_string(active_ + 1) + "/" +
+                           std::to_string(windows_.size()) + "]";
+        segs.push_back({wtag, P_BANNER, 3});
+        segs.push_back({" [" + cfg_.model + "]", P_BANNER, 5});
         segs.push_back({" " + state_glyph(state_), state_pair(state_), 1});
 
         if (stats_.latency_ms >= 0) {
@@ -540,9 +543,15 @@ private:
         move(y, 0);
         clrtoeol();
         attron(COLOR_PAIR(P_USER));
-        std::string shown = "prompt> " + s;
+        const std::string kPrompt = "amber> ";
+        std::string shown = kPrompt + s;
         mvaddnstr(y, 0, shown.c_str(), width());
         attroff(COLOR_PAIR(P_USER));
+        // Park the visible (blinking) cursor at the end of the typed text so the
+        // window reads as focused, industry-standard style. Clamp to the width.
+        int cx = std::min(display_cols(shown), width() - 1);
+        curs_set(1);
+        move(y, cx);
         refresh();
     }
 
@@ -725,6 +734,23 @@ private:
         hooks.on_tool_result = [this](const std::string& n, const agent::ToolResult& r) {
             append_line(P_STATUS, "result:" + n + " " + (r.ok ? r.output : r.error));
         };
+        hooks.on_approval = [this](const std::string&, const agent::json&,
+                                   const std::string& summary) -> agent::Approval {
+            // Modal confirm before a side-effecting tool (bash) runs.
+            flush_stream();
+            int pick = menu_select("Approve action?  " + summary,
+                                   {"Deny", "Allow once", "Allow for this session"});
+            agent::Approval d = agent::Approval::Deny;
+            if (pick == 1) d = agent::Approval::AllowOnce;
+            else if (pick == 2) d = agent::Approval::AllowSession;
+            append_line(P_STATUS,
+                        std::string("approval: ") +
+                        (d == agent::Approval::Deny ? "denied" :
+                         d == agent::Approval::AllowOnce ? "allowed once" :
+                         "allowed for session") + "  (" + summary + ")");
+            draw();
+            return d;
+        };
         hooks.on_state = [this](agent::RunState s) {
             state_ = s;
             draw();
@@ -889,6 +915,21 @@ private:
             {"help", {"?", "h"}, "[command]",
              "list commands, or show detail for one",
              [this](const std::string& a) { cmd_help(a); }},
+            {"model", {"settings", "server"}, "",
+             "set provider URL, token, model, and context (test connection)",
+             [this](const std::string&) { settings_screen(); redraw_after_modal(); }},
+            {"config", {"cfg"}, "",
+             "show the current configuration",
+             [this](const std::string&) { config_screen(); redraw_after_modal(); }},
+            {"think", {"reasoning"}, "",
+             "toggle live thinking/reasoning display",
+             [this](const std::string&) { toggle_thinking(); }},
+            {"new", {}, "",
+             "open a new chat window",
+             [this](const std::string&) { new_window("chat"); draw(); }},
+            {"close", {}, "",
+             "close the current window",
+             [this](const std::string&) { close_window(); }},
             {"window", {"win", "w"}, "new|close|list|rename <name>",
              "manage chat windows",
              [this](const std::string& a) { cmd_window(a); }},
@@ -946,6 +987,13 @@ private:
                 u.append(w - u.size() + 2, ' ');
                 append_line(P_STATUS, "  " + u + c.help);
             }
+            append_line(P_STATUS, "");
+            append_line(P_STATUS, "Keys:  Enter/Ctrl-G send   PgUp/PgDn scroll");
+            append_line(P_STATUS,
+                        "       Ctrl-N new window   Ctrl-W close   Alt+1..9 switch");
+            append_line(P_STATUS, "       Ctrl-C quit");
+            append_line(P_STATUS,
+                        "Type '/' to open the command drawer (filter, Tab, Enter).");
             draw();
             return;
         }
@@ -983,25 +1031,15 @@ private:
 
     void request_quit() { quit_ = true; }
 
-    void help_screen() {
-        info_dialog("Help", {
-            "F1        show this help",
-            "F2        show configuration",
-            "F3        toggle live thinking display",
-            "F10       server settings (URL, token, model)",
-            "Enter     send the prompt",
-            "Ctrl-G    send the prompt",
-            "PgUp/PgDn scroll scrollback",
-            "Ctrl-N    new window        Ctrl-W  close window",
-            "Alt+1..9  switch to window N",
-            "Ctrl-C    quit",
-            "",
-            "Type '/' to open the command drawer: filter as you type,",
-            "Tab completes, Up/Down select, Enter runs, Esc closes.",
-            "Type /help for the full command list, /help <cmd> for detail.",
-            "",
-            "Tools: read (paginated), write (patch), search (grep/semantic).",
-        });
+    // Restore the main screen after a modal dialog closes (slash-command entry
+    // points don't have the run loop's `input` in scope, so redraw with empty).
+    void redraw_after_modal() { touchwin(stdscr); draw(); draw_input(""); }
+
+    void toggle_thinking() {
+        cfg_.show_reasoning = !cfg_.show_reasoning;
+        append_line(P_STATUS, std::string("thinking display: ") +
+                                  (cfg_.show_reasoning ? "on" : "off"));
+        draw();
     }
 
     void config_screen() {
@@ -1013,8 +1051,10 @@ private:
             "api_key:   " + mask(cfg_.api_key),
             "model:     " + cfg_.model,
             "stream:    " + std::string(cfg_.stream ? "on" : "off"),
-            "context:   " + std::to_string(cfg_.context_size) + " tokens" +
-                (last_detected_.ok ? " (auto-detected)" : ""),
+            "context:   " + (cfg_.context_size > 0
+                                 ? std::to_string(cfg_.context_size) + " tokens" +
+                                       (cfg_.context_explicit ? "" : " (auto-detected)")
+                                 : std::string("auto (not detected)")),
             "max_iter:  " + std::to_string(cfg_.max_tool_iterations),
             "system:    " + cfg_.system_prompt_path,
             "tools:     " + cfg_.tools_prompt_path,
@@ -1043,6 +1083,31 @@ private:
         draw();
     }
 
+    // Test the configured endpoint: probe /v1/models and populate model and/or
+    // context size for any field the user left on auto. Reports a clear
+    // success/failure line so the user knows whether the URL works. Returns
+    // true if the server responded.
+    bool test_connection(bool announce) {
+        agent::ServerInfo info = agent::apply_server_autodetect(cfg_);
+        if (!info.ok) {
+            append_line(P_STATUS,
+                        "test: no response from " + cfg_.api_base +
+                        " (check URL/token and that the server is running)");
+            draw();
+            return false;
+        }
+        last_detected_ = info;
+        std::string note = "test: OK - " + cfg_.api_base +
+                           "  model=" + cfg_.model +
+                           " n_ctx=" + std::to_string(cfg_.context_size);
+        if (info.context_train > 0 && info.context_train != cfg_.context_size)
+            note += " (max " + std::to_string(info.context_train) + ")";
+        append_line(P_STATUS, note);
+        (void)announce;
+        draw();
+        return true;
+    }
+
     // Server settings using a native libform dialog. The detected server info
     // (if any) is shown so the user knows what auto-detection found.
     void settings_screen() {
@@ -1052,16 +1117,20 @@ private:
             : std::string("detected: (none - press Detect below)");
 
         std::vector<std::string> pre = {"Edit settings",
-                                        "Detect from server now"};
+                                        "Test connection & fill model/context"};
         int pick = menu_select(det, pre);
-        if (pick == 1) { detect_server(true); return; }
+        if (pick == 1) { test_connection(true); return; }
         if (pick != 0) return;
 
+        // Show blank for auto values so the user sees what will auto-detect.
+        std::string model_field = cfg_.model_explicit ? cfg_.model : "";
+        std::string ctx_field =
+            cfg_.context_explicit ? std::to_string(cfg_.context_size) : "0";
         std::vector<FieldSpec> fields = {
             {"Server URL", cfg_.api_base, false},
             {"Token", cfg_.api_key, true},
-            {"Model (blank = auto)", cfg_.model, false},
-            {"Context n_ctx (0 = auto)", std::to_string(cfg_.context_size), false},
+            {"Model (blank = auto)", model_field, false},
+            {"Context n_ctx (0 = auto)", ctx_field, false},
         };
         if (!form_edit("Server settings", fields)) return;
 
@@ -1079,11 +1148,11 @@ private:
             int n = std::stoi(fields[3].value);
             if (n > 0) { cfg_.context_size = n; cfg_.context_explicit = true; }
             else       { cfg_.context_explicit = false; }
-        } catch (...) {}
+        } catch (...) { cfg_.context_explicit = false; }
 
         // Re-probe to fill anything the user left on auto.
         if (!cfg_.model_explicit || !cfg_.context_explicit)
-            detect_server(false);
+            test_connection(false);
 
         std::vector<std::string> post = {"Save to " + settings_path_,
                                          "Apply only (don't save)"};
@@ -1096,17 +1165,7 @@ private:
         }
     }
 
-    void save_settings() {
-        std::ofstream f(settings_path_, std::ios::trunc);
-        if (!f) return;
-        f << "# amber settings\n";
-        f << "api_base=" << cfg_.api_base << "\n";
-        f << "api_key=" << cfg_.api_key << "\n";
-        f << "model=" << cfg_.model << "\n";
-        f << "context_size=" << cfg_.context_size << "\n";
-        f << "system_prompt=" << cfg_.system_prompt_path << "\n";
-        f << "tools_prompt=" << cfg_.tools_prompt_path << "\n";
-    }
+    void save_settings() { cfg_.save(settings_path_); }
 
     agent::Config cfg_;
     agent::ToolRegistry& reg_;
@@ -1162,6 +1221,10 @@ int main(int argc, char** argv) {
         if (sf) cfg.load("amber.conf");
     }
     cfg.apply_environment();
+
+    // Probe the server before validating so a blank (auto) model / context can
+    // be filled in rather than tripping validation on an empty model.
+    agent::apply_server_autodetect(cfg);
 
     if (auto errs = cfg.validate(); !errs.empty()) {
         std::fprintf(stderr, "error: invalid configuration:\n");

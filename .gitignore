@@ -27,3 +27,4 @@ logs/
 *.jsonl
 
 .DS_Store
+include/agent/version.h

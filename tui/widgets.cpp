@@ -221,6 +221,7 @@ bool form_edit(const std::string& title, std::vector<FieldSpec>& fields) {
 }
 
 void info_dialog(const std::string& title, const std::vector<std::string>& rows) {
+    curs_set(0);   // hide the input-line cursor while a modal is up
     int sh, sw;
     getmaxyx(stdscr, sh, sw);
     int maxw = 0;
@@ -276,6 +277,7 @@ void info_dialog(const std::string& title, const std::vector<std::string>& rows)
 }
 
 int menu_select(const std::string& title, const std::vector<std::string>& choices) {
+    curs_set(0);   // hide the input-line cursor while a modal is up
     int sh, sw;
     getmaxyx(stdscr, sh, sw);
     int maxw = static_cast<int>(title.size());

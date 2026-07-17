@@ -1,0 +1,27 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Jacek Trefon (www.trefon.com)
+//
+// GENERATED FILE - do not edit. Produced by ./configure from
+// include/agent/version.h.in. The version string is sourced from the top-level
+// VERSION file; the build date is stamped at configure time.
+
+#ifndef AGENT_VERSION_H
+#define AGENT_VERSION_H
+
+namespace agent {
+
+// Semantic version, e.g. "0.1.0" (from the VERSION file).
+inline constexpr const char* kVersion = "@VERSION@";
+
+// Date this build was configured, e.g. "2026-07-17".
+inline constexpr const char* kBuildDate = "@BUILD_DATE@";
+
+// Project home / source repository.
+inline constexpr const char* kRepo = "https://github.com/jtrefon/amber";
+
+// Author credit, surfaced tastefully in the welcome mural.
+inline constexpr const char* kAuthor = "trefon.com";
+
+} // namespace agent
+
+#endif // AGENT_VERSION_H

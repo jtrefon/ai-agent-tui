@@ -42,7 +42,8 @@ CLI_OBJ   = $(BUILD_DIR)/src/main.o
 TUI_OBJS  = $(BUILD_DIR)/tui/tui.o \
             $(BUILD_DIR)/tui/widgets.o \
             $(BUILD_DIR)/tui/textutil.o \
-            $(BUILD_DIR)/tui/palette.o
+            $(BUILD_DIR)/tui/palette.o \
+            $(BUILD_DIR)/tui/welcome.o
 TEST_OBJ  = $(BUILD_DIR)/src/smoketest.o
 UNITTEST_OBJ = $(BUILD_DIR)/tests/run_tests.o
 

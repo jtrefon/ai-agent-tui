@@ -40,6 +40,12 @@ jobs:
             pkg-config ruby ruby-dev
           sudo gem install --no-document fpm
 
+      - name: Sync VERSION to tag
+        run: |
+          # Keep the in-binary version (mural / kVersion) consistent with the
+          # release tag. configure reads VERSION to stamp include/agent/version.h.
+          printf '%s\n' "${{ steps.ver.outputs.version }}" > VERSION
+
       - name: Configure
         run: ./configure --prefix=/usr
 

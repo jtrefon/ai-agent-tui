@@ -20,6 +20,7 @@ void print_usage(const char* prog) {
               << "  --config FILE      KEY=VALUE config file\n"
               << "  --prompt TEXT      User prompt (else read from stdin)\n"
               << "  --yes              Auto-approve tools that need confirmation (e.g. bash)\n"
+              << "  --version          Print version and exit\n"
               << "  -h, --help         Show this help\n";
 }
 
@@ -45,6 +46,11 @@ int main(int argc, char** argv) {
         else if (a == "--config")     config_file = next("");
         else if (a == "--prompt")     prompt = next("");
         else if (a == "--yes" || a == "--yolo") auto_approve = true;
+        else if (a == "--version") {
+            std::cout << "amber " << agent::kVersion << " (" << agent::kBuildDate
+                      << ")\n";
+            return 0;
+        }
         else if (a == "-h" || a == "--help") { print_usage(argv[0]); return 0; }
         else if (prompt.empty())      prompt = a;
         else { prompt += " " + a; }

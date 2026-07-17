@@ -21,6 +21,7 @@ struct Window {
     std::string title = "chat";
     std::string session_id;          // set once persisted / loaded
     bool dirty = false;              // has unsaved changes since last save
+    bool read_only = false;          // welcome / log window: typing spawns chat
 
     std::unique_ptr<agent::Agent> agent;  // retains conversation across turns
 

@@ -5,6 +5,7 @@
 #define AGENT_AGENT_H_ALL
 
 // Umbrella header for libagent consumers (TUI, tests, headless CLI).
+#include "agent/version.h"
 #include "agent/tool.h"
 #include "agent/config.h"
 #include "agent/llm.h"
