@@ -7,6 +7,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <unistd.h>
 
 static inline void run_cmd(const std::string& cmd) {
     int rc = std::system(cmd.c_str());
@@ -545,6 +546,89 @@ TEST(llm_streaming_captures_usage_stats) {
     close(srv);
 }
 #endif // __linux__
+
+// ---------------------------------------------------------------------------
+// Session persistence
+// ---------------------------------------------------------------------------
+
+TEST(session_json_roundtrip_preserves_messages) {
+    agent::Session s;
+    s.model = "test-model";
+    agent::Message sys; sys.role = "system"; sys.content = "be helpful";
+    agent::Message u;   u.role = "user";     u.content = "hi\nthere";
+    agent::Message a;   a.role = "assistant"; a.content = "hello";
+    a.reasoning = "think first";
+    s.messages = {sys, u, a};
+    s.derive_title();
+    ASSERT_EQ(s.title, "hi");
+
+    agent::json j = s.to_json();
+    agent::Session back = agent::Session::from_json(j);
+    ASSERT_EQ(back.model, "test-model");
+    ASSERT_EQ(back.messages.size(), 3u);
+    ASSERT_EQ(back.messages[0].role, "system");
+    ASSERT_EQ(back.messages[1].content, "hi\nthere");
+    ASSERT_EQ(back.messages[2].reasoning, "think first");
+}
+
+TEST(session_store_save_load_list_delete) {
+    std::string dir = "/tmp/cpp_agent_sessions_test";
+    run_cmd("rm -rf " + dir);
+    agent::SessionStore store(dir);
+
+    agent::Session s1;
+    agent::Message u; u.role = "user"; u.content = "first";
+    s1.messages = {u};
+    s1.derive_title();
+    ASSERT_TRUE(store.save(s1));
+    ASSERT_FALSE(s1.id.empty());
+    ASSERT_TRUE(s1.updated_ms > 0);
+
+    agent::Session loaded;
+    ASSERT_TRUE(store.load(s1.id, loaded));
+    ASSERT_EQ(loaded.messages.size(), 1u);
+    ASSERT_EQ(loaded.messages[0].content, "first");
+
+    usleep(2000);
+    agent::Session s2;
+    agent::Message u2; u2.role = "user"; u2.content = "second";
+    s2.messages = {u2};
+    s2.derive_title();
+    ASSERT_TRUE(store.save(s2));
+
+    auto metas = store.list();
+    ASSERT_EQ(metas.size(), 2u);
+    // Newest updated first.
+    ASSERT_EQ(metas[0].id, s2.id);
+    ASSERT_EQ(metas[0].message_count, 1);
+
+    ASSERT_TRUE(store.remove(s1.id));
+    ASSERT_EQ(store.list().size(), 1u);
+    agent::Session gone;
+    ASSERT_FALSE(store.load(s1.id, gone));
+    run_cmd("rm -rf " + dir);
+}
+
+// ---------------------------------------------------------------------------
+// Agent conversation memory (stateful across run() calls)
+// ---------------------------------------------------------------------------
+
+TEST(agent_retains_history_across_turns) {
+    agent::Config cfg;
+    agent::ToolRegistry reg;
+    agent::Agent ag(cfg, reg);
+
+    // Seed a prior conversation as if loaded from a session.
+    agent::Message sys; sys.role = "system"; sys.content = "sys";
+    agent::Message u;   u.role = "user";     u.content = "earlier";
+    agent::Message a;   a.role = "assistant"; a.content = "reply";
+    ag.set_history({sys, u, a});
+    ASSERT_EQ(ag.history().size(), 3u);
+    ASSERT_EQ(ag.history().front().role, "system");
+
+    ag.reset();
+    ASSERT_EQ(ag.history().size(), 0u);
+}
 
 // ---------------------------------------------------------------------------
 

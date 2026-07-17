@@ -9,6 +9,7 @@
 #include "agent/agent.h"
 #include "agent/prompt.h"
 #include "agent/statusbar.h"
+#include "agent/session.h"
 
 namespace agent {
 // Register the built-in tools (read, write, search) into the given registry.

@@ -42,10 +42,8 @@ void ConversationLog::event(const std::string& type, const json& fields) {
 Agent::Agent(const Config& cfg, ToolRegistry& registry, AgentHooks hooks)
     : cfg_(cfg), registry_(registry), client_(cfg), hooks_(std::move(hooks)) {}
 
-std::string Agent::run(const std::string& user_prompt) {
-    history_.clear();
-    if (!log_.enabled()) log_.open(cfg_.log_path);
-    log_.event("user", {{"content", user_prompt}, {"model", cfg_.model}});
+void Agent::ensure_system_prompt() {
+    if (!history_.empty() && history_.front().role == "system") return;
 
     std::string system = load_prompt(cfg_.system_prompt_path);
     if (system.empty())
@@ -59,7 +57,23 @@ std::string Agent::run(const std::string& user_prompt) {
     Message sys_msg;
     sys_msg.role = "system";
     sys_msg.content = system;
-    history_.push_back(sys_msg);
+    history_.insert(history_.begin(), sys_msg);
+}
+
+void Agent::set_history(std::vector<Message> messages) {
+    history_ = std::move(messages);
+}
+
+void Agent::reset() {
+    history_.clear();
+}
+
+std::string Agent::run(const std::string& user_prompt) {
+    // Retain prior turns (stateful). Seed the system prompt only if this is a
+    // brand-new conversation.
+    ensure_system_prompt();
+    if (!log_.enabled()) log_.open(cfg_.log_path);
+    log_.event("user", {{"content", user_prompt}, {"model", cfg_.model}});
 
     Message user_msg;
     user_msg.role = "user";

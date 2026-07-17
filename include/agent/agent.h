@@ -62,10 +62,27 @@ class Agent {
 public:
     Agent(const Config& cfg, ToolRegistry& registry, AgentHooks hooks = {});
 
-    // Run to completion. Returns the final assistant reply text.
+    // Run one turn to completion, appending to the ongoing conversation.
+    // Context from previous turns is retained (the agent is stateful). Returns
+    // the final assistant reply text.
     std::string run(const std::string& user_prompt);
 
+    // Full conversation so far, including the system prompt (index 0 once
+    // seeded). Used by UIs to persist a session.
+    const std::vector<Message>& history() const { return history_; }
+
+    // Replace the conversation with a previously saved one (e.g. loaded from a
+    // session file). If `messages` has no leading system message, the system
+    // prompt is (re)seeded on the next run. Clears telemetry log association.
+    void set_history(std::vector<Message> messages);
+
+    // Forget everything and start a fresh conversation on the next run.
+    void reset();
+
 private:
+    // Build and push the system message if the conversation is empty. Idempotent.
+    void ensure_system_prompt();
+
     Config cfg_;
     ToolRegistry& registry_;
     LLMClient client_;
