@@ -245,24 +245,11 @@ std::string Agent::run(const std::string& user_prompt) {
             }
         }
 
-        // If the model replied with text but no tool calls on the first
-        // iteration, it likely described intent without acting. Nudge it
-        // to actually use tools instead of just talking about them.
-        bool has_tools = !reply.tool_calls.is_null() &&
-                         !reply.tool_calls.empty();
-        if (iter == 0 && !reply.content.empty() && !has_tools) {
-            if (hooks_.on_status) hooks_.on_status("re-prompt: use tools");
-            Message nudge;
-            nudge.role = "user";
-            nudge.content = "Please proceed with executing tools now. "
-                "Use cat/ls/grep/bash to explore the codebase. "
-                "Do not just describe what you plan to do — "
-                "actually call the tool right now.";
-            history_.push_back(nudge);
-            continue;
-        }
 
-        if (reply.content.empty() && !reply.tool_calls.is_null()) {
+        // Dispatch tool calls whenever present — the model often narrates
+        // ("I'll read that file") alongside the actual call. Dispatched
+        // regardless of text content so multi-step chains work.
+        if (!reply.tool_calls.is_null() && !reply.tool_calls.empty()) {
             set_state(RunState::Tooling);
             if (hooks_.on_status) hooks_.on_status("assistant requested tools");
             dispatch_tool_calls(reply.tool_calls, tools);
