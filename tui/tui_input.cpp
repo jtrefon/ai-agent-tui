@@ -141,7 +141,7 @@ void Tui::build_commands() {
         {"save", {}, "",
          "persist the current conversation",
          [this](const std::string&) { save_session(); }},
-        {"load", {"sessions", "open"}, "",
+        {"sessions", {"load", "open"}, "",
          "browse and load a saved session",
          [this](const std::string&) { session_browser(); }},
         {"quit", {"exit", "q"}, "",
