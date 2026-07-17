@@ -79,6 +79,10 @@ public:
     // Forget everything and start a fresh conversation on the next run.
     void reset();
 
+    // Replace the UI callbacks. Lets a long-lived agent receive fresh closures
+    // each turn (e.g. a TUI window rebinding lambdas that capture live state).
+    void set_hooks(AgentHooks hooks) { hooks_ = std::move(hooks); }
+
 private:
     // Build and push the system message if the conversation is empty. Idempotent.
     void ensure_system_prompt();

@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <ctime>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -28,10 +29,30 @@ using tui::P_GAUGE_WARN;
 using tui::P_GAUGE_CRIT;
 using tui::P_BAR_DIM;
 
+// One chat window: an independent conversation with its own scrollback, live
+// streaming state, persistent (stateful) Agent, and session identity. Windows
+// are switchable IRC-style; the active one is drawn.
+struct Window {
+    std::string title = "chat";
+    std::string session_id;          // set once persisted / loaded
+    bool dirty = false;              // has unsaved changes since last save
+
+    std::unique_ptr<agent::Agent> agent;  // retains conversation across turns
+
+    std::vector<std::pair<int, std::string>> lines;
+    int scroll_top = 0;
+
+    std::string stream_buf;
+    int stream_color = P_ASSISTANT;
+    std::string stream_ts;
+    std::string reason_buf;
+    bool reason_folded = false;
+};
+
 class Tui {
 public:
     Tui(agent::Config cfg, agent::ToolRegistry& reg)
-        : cfg_(std::move(cfg)), reg_(reg) {
+        : cfg_(std::move(cfg)), reg_(reg), store_() {
         // Honour the user's locale so ncursesw can encode/decode multibyte
         // UTF-8 glyphs (box drawing, block gauges, dots). Must precede initscr.
         std::setlocale(LC_ALL, "");
@@ -44,14 +65,35 @@ public:
         start_color();
         use_default_colors();
         tui::init_pairs();
+
+        new_window("chat");   // always have one conversation to talk to
     }
 
-    ~Tui() { endwin(); }
+    ~Tui() {
+        // Persist every window with unsaved work before tearing down curses.
+        for (size_t i = 0; i < windows_.size(); ++i) {
+            Window& w = *windows_[i];
+            if (!w.dirty || !w.agent || w.agent->history().empty()) continue;
+            agent::Session s = snapshot(w);
+            if (store_.save(s)) w.session_id = s.id;
+        }
+        endwin();
+    }
+
+    // Create a fresh window with its own stateful Agent and make it active.
+    Window& new_window(const std::string& title) {
+        auto w = std::make_unique<Window>();
+        w->title = title;
+        w->agent = std::make_unique<agent::Agent>(cfg_, reg_);
+        windows_.push_back(std::move(w));
+        active_ = windows_.size() - 1;
+        return *windows_.back();
+    }
 
     void run() {
         draw();
-        banner("cpp-agent - F1 help  F2 config  F3 thinking  F10 settings  "
-               "Enter send  PgUp/PgDn scroll  Ctrl-C quit");
+        banner("cpp-agent - F1 help  Ctrl-N new win  Alt+1..9 switch  "
+               "/save /load  Enter send  Ctrl-C quit");
         draw_input("");
         detect_server(false);   // auto-fill model/context from the server
 
@@ -73,18 +115,39 @@ public:
                                           (cfg_.show_reasoning ? "on" : "off"));
                 draw(); draw_input(input); continue;
             }
+            if (ch == 14) {   // Ctrl-N: new window
+                new_window("chat");
+                draw(); draw_input(input); continue;
+            }
+            if (ch == 23) {   // Ctrl-W: close window
+                close_window();
+                draw(); draw_input(input); continue;
+            }
+            if (ch == 27) {   // ESC prefix: Alt+<digit> jumps to window N
+                int n = getch();
+                if (n >= '1' && n <= '9') {
+                    switch_to(static_cast<size_t>(n - '1'));
+                    draw_input(input);
+                }
+                continue;
+            }
             if (ch == KEY_NPAGE) {
-                scroll_top_ = std::min(max_scroll(),
-                                       scroll_top_ + lines_per_page());
+                win().scroll_top = std::min(max_scroll(),
+                                       win().scroll_top + lines_per_page());
                 draw(); draw_input(input); continue;
             }
             if (ch == KEY_PPAGE) {
-                scroll_top_ = std::max(0, scroll_top_ - lines_per_page());
+                win().scroll_top = std::max(0, win().scroll_top - lines_per_page());
                 draw(); draw_input(input); continue;
             }
             if (ch == 7 || ch == 10 || ch == 13 || ch == KEY_ENTER) {
                 if (input.empty()) continue;
                 std::string prompt = input;
+                if (handle_slash(prompt)) {
+                    input.clear();
+                    draw(); draw_input("");
+                    continue;
+                }
                 append_line(P_USER, "> " + input);
                 input.clear();
                 draw_input("");
@@ -105,14 +168,18 @@ public:
 private:
     int height() const { int y, x; getmaxyx(stdscr, y, x); (void)x; return y; }
     int width() const { int y, x; getmaxyx(stdscr, y, x); (void)y; return x; }
-    int lines_per_page() const { return std::max(1, height() - 2); }
+    // Layout: row 0 window-tab line, rows 1..H-3 chat, row H-2 status bar,
+    // row H-1 input.
+    int chat_top() const { return 1; }
+    int chat_height() const { return std::max(1, height() - 3); }
+    int lines_per_page() const { return chat_height(); }
     int stream_lines() const {
-        return stream_buf_.empty()
+        return win().stream_buf.empty()
                    ? 0
-                   : static_cast<int>(wrap_text(stream_buf_, width()).size());
+                   : static_cast<int>(wrap_text(win().stream_buf, width()).size());
     }
     int max_scroll() const {
-        int m = static_cast<int>(lines_.size()) + stream_lines() - (height() - 2);
+        int m = static_cast<int>(win().lines.size()) + stream_lines() - chat_height();
         return m < 0 ? 0 : m;
     }
 
@@ -236,26 +303,48 @@ private:
         auto wrapped = wrap_text(text, avail);
         if (wrapped.empty()) wrapped.push_back("");
         for (size_t i = 0; i < wrapped.size(); ++i)
-            lines_.push_back({color, (i == 0 ? ts : pad) + wrapped[i]});
-        if (lines_.size() > 10000)
-            lines_.erase(lines_.begin(), lines_.begin() + 5000);
-        scroll_top_ = max_scroll();
+            win().lines.push_back({color, (i == 0 ? ts : pad) + wrapped[i]});
+        if (win().lines.size() > 10000)
+            win().lines.erase(win().lines.begin(), win().lines.begin() + 5000);
+        win().scroll_top = max_scroll();
     }
 
     void banner(const std::string& text) {
-        lines_.push_back({P_BANNER, text});
-        scroll_top_ = max_scroll();
+        win().lines.push_back({P_BANNER, text});
+        win().scroll_top = max_scroll();
+    }
+
+    // Top line: IRC-style window tabs, e.g. "[1:chat][2:bugfix]" with the active
+    // window highlighted. Rendered with the wide-char API for correct columns.
+    void draw_tabs() {
+        move(0, 0);
+        attron(COLOR_PAIR(P_STATUS));
+        for (int i = 0; i < width(); ++i) addch(' ');
+        int col = 0;
+        for (size_t i = 0; i < windows_.size() && col < width(); ++i) {
+            std::string label =
+                "[" + std::to_string(i + 1) + ":" + windows_[i]->title + "]";
+            bool act = (i == active_);
+            if (act) attron(A_REVERSE);
+            std::wstring w = to_wide(label);
+            mvaddnwstr(0, col, w.c_str(),
+                       std::min<int>(w.size(), std::max(0, width() - col)));
+            if (act) attroff(A_REVERSE);
+            col += display_cols(label);
+        }
+        attroff(COLOR_PAIR(P_STATUS));
     }
 
     void draw() {
         erase();
-        int view_h = height() - 2;
+        draw_tabs();
+        int view_h = chat_height();
 
         // Build the full display list = committed lines + live (uncommitted)
         // streaming buffer wrapped to the current width. The stream buffer is
         // rendered in place and only committed once complete.
         std::vector<std::pair<int, std::string>> pending;
-        const std::string ts = stream_ts_.empty() ? timestamp() : stream_ts_;
+        const std::string ts = win().stream_ts.empty() ? timestamp() : win().stream_ts;
         const std::string pad(ts.size(), ' ');
         int avail = std::max(1, width() - static_cast<int>(ts.size()));
         auto push_wrapped = [&](int color, const std::string& body) {
@@ -263,28 +352,28 @@ private:
             for (size_t i = 0; i < ls.size(); ++i)
                 pending.push_back({color, (i == 0 ? ts : pad) + ls[i]});
         };
-        if (show_reasoning_ && !reason_folded_ && !reason_buf_.empty()) {
+        if (show_reasoning_ && !win().reason_folded && !win().reason_buf.empty()) {
             pending.push_back({P_REASONING, ts + "thinking..."});
-            for (auto& l : wrap_text(reason_buf_, avail))
+            for (auto& l : wrap_text(win().reason_buf, avail))
                 pending.push_back({P_REASONING, pad + l});
         }
-        if (!stream_buf_.empty())
-            push_wrapped(stream_color_, stream_buf_);
+        if (!win().stream_buf.empty())
+            push_wrapped(win().stream_color, win().stream_buf);
 
-        int total = static_cast<int>(lines_.size() + pending.size());
+        int total = static_cast<int>(win().lines.size() + pending.size());
         int max_top = std::max(0, total - view_h);
-        int start = std::min(scroll_top_, max_top);
+        int start = std::min(win().scroll_top, max_top);
 
         for (int row = 0; row < view_h; ++row) {
             int idx = start + row;
             if (idx < 0 || idx >= total) continue;
             const auto& [color, text] =
-                (idx < static_cast<int>(lines_.size()))
-                    ? lines_[idx]
-                    : pending[idx - lines_.size()];
+                (idx < static_cast<int>(win().lines.size()))
+                    ? win().lines[idx]
+                    : pending[idx - win().lines.size()];
             bool dim = (color == P_REASONING);
             attron(COLOR_PAIR(color) | (dim ? A_DIM : 0));
-            mvaddnstr(row, 0, text.c_str(), width());
+            mvaddnstr(chat_top() + row, 0, text.c_str(), width());
             attroff(COLOR_PAIR(color) | (dim ? A_DIM : 0));
         }
 
@@ -501,10 +590,10 @@ private:
     // Update only the status bar (for the once-per-second clock tick) without
     // rebuilding the whole scrollback view.
     void tick_clock() {
-        int total = static_cast<int>(lines_.size());
-        if (!stream_buf_.empty()) total += stream_lines();
-        int start = std::min(scroll_top_,
-                             std::max(0, total - (height() - 2)));
+        int total = static_cast<int>(win().lines.size());
+        if (!win().stream_buf.empty()) total += stream_lines();
+        int start = std::min(win().scroll_top,
+                             std::max(0, total - chat_height()));
         draw_status_bar("ln " + std::to_string(start + 1) + "/" +
                         std::to_string(total));
         refresh();
@@ -523,32 +612,32 @@ private:
 
     void send(const std::string& prompt) {
         agent::AgentHooks hooks;
-        reason_buf_.clear();
-        reason_folded_ = false;
+        win().reason_buf.clear();
+        win().reason_folded = false;
         show_reasoning_ = cfg_.show_reasoning;
-        stream_ts_ = timestamp();   // stamp the reply the moment it starts
+        win().stream_ts = timestamp();   // stamp the reply the moment it starts
         hooks.on_reasoning = [this](const std::string& d) {
             // Live thinking: accumulate and render dim, above the answer.
-            reason_buf_ += d;
-            scroll_top_ = max_scroll();
+            win().reason_buf += d;
+            win().scroll_top = max_scroll();
             draw();
         };
         hooks.on_token = [this](const std::string& d) {
             // First answer token: fold any thinking into one collapsible summary
             // line so it stops occupying the viewport.
-            if (!reason_folded_ && !reason_buf_.empty()) {
+            if (!win().reason_folded && !win().reason_buf.empty()) {
                 fold_reasoning();
             }
             // Accumulate the partial message and re-render it live in place.
             // Do NOT commit per token (that made each fragment its own line).
-            stream_color_ = P_ASSISTANT;
-            stream_buf_ += d;
-            scroll_top_ = max_scroll();   // auto-follow
+            win().stream_color = P_ASSISTANT;
+            win().stream_buf += d;
+            win().scroll_top = max_scroll();   // auto-follow
             draw();
         };
         hooks.on_assistant = [this](const std::string& s) {
             // Non-streaming path: nothing was streamed, so commit the whole msg.
-            if (stream_buf_.empty()) append_line(P_ASSISTANT, s);
+            if (win().stream_buf.empty()) append_line(P_ASSISTANT, s);
         };
         hooks.on_status = [this](const std::string& s) { append_line(P_STATUS, s); };
         hooks.on_tool_call = [this](const std::string& n, const agent::json& a) {
@@ -568,8 +657,11 @@ private:
             draw();
         };
         try {
-            agent::Agent agent(cfg_, reg_, hooks);
-            agent.run(prompt);
+            // Reuse this window's persistent agent so context accumulates
+            // across turns instead of starting fresh each prompt.
+            win().agent->set_hooks(hooks);
+            win().agent->run(prompt);
+            win().dirty = true;
         } catch (const std::exception& e) {
             state_ = agent::RunState::Error;
             flush_stream();
@@ -577,32 +669,161 @@ private:
         }
         if (state_ != agent::RunState::Error) state_ = agent::RunState::Idle;
         flush_stream();
+        autosave();
         draw();
     }
 
     // Collapse the live thinking buffer into a single dim summary line. The
     // full reasoning is preserved in the telemetry log, not the viewport.
     void fold_reasoning() {
-        if (reason_folded_) return;
-        reason_folded_ = true;
-        if (reason_buf_.empty()) return;
+        if (win().reason_folded) return;
+        win().reason_folded = true;
+        if (win().reason_buf.empty()) return;
         size_t words = 1;
-        for (char ch : reason_buf_) if (ch == ' ') ++words;
+        for (char ch : win().reason_buf) if (ch == ' ') ++words;
         append_line_ts(P_REASONING,
                        "[thought for " + std::to_string(words) + " words]",
-                       stream_ts_.empty() ? timestamp() : stream_ts_);
-        reason_buf_.clear();
+                       win().stream_ts.empty() ? timestamp() : win().stream_ts);
+        win().reason_buf.clear();
     }
 
     void flush_stream() {
         // If we finished on pure thinking (no answer streamed), still fold it.
-        if (!reason_folded_ && !reason_buf_.empty()) fold_reasoning();
-        if (stream_buf_.empty()) return;
-        append_line_ts(stream_color_, stream_buf_,
-                       stream_ts_.empty() ? timestamp() : stream_ts_);
-        stream_buf_.clear();
-        stream_ts_.clear();
+        if (!win().reason_folded && !win().reason_buf.empty()) fold_reasoning();
+        if (win().stream_buf.empty()) return;
+        append_line_ts(win().stream_color, win().stream_buf,
+                       win().stream_ts.empty() ? timestamp() : win().stream_ts);
+        win().stream_buf.clear();
+        win().stream_ts.clear();
         draw();
+    }
+
+    // ---- session persistence -------------------------------------------
+
+    // Build a Session snapshot from a window's agent history + metadata.
+    agent::Session snapshot(Window& w) {
+        agent::Session s;
+        s.id = w.session_id;
+        s.model = cfg_.model;
+        s.messages = w.agent ? w.agent->history() : std::vector<agent::Message>{};
+        s.derive_title();
+        if (w.title != "chat" && !w.title.empty()) s.title = w.title;
+        return s;
+    }
+
+    // Persist the active window silently (called after each turn). No-op if the
+    // window has no real conversation yet.
+    void autosave() {
+        Window& w = win();
+        if (!w.dirty || !w.agent || w.agent->history().empty()) return;
+        agent::Session s = snapshot(w);
+        if (store_.save(s)) {
+            w.session_id = s.id;
+            if (w.title == "chat" && !s.title.empty()) w.title = s.title;
+            w.dirty = false;
+        }
+    }
+
+    // Explicit /save: persist and report.
+    void save_session() {
+        Window& w = win();
+        if (!w.agent || w.agent->history().empty()) {
+            append_line(P_STATUS, "nothing to save (empty conversation)");
+            return;
+        }
+        agent::Session s = snapshot(w);
+        if (store_.save(s)) {
+            w.session_id = s.id;
+            w.dirty = false;
+            append_line(P_STATUS, "saved session " + s.id + " (\"" + s.title + "\")");
+        } else {
+            append_line(P_STATUS, "save failed (could not write " + store_.dir() + ")");
+        }
+    }
+
+    // Load a stored session into a new window.
+    void load_session(const std::string& id) {
+        agent::Session s;
+        if (!store_.load(id, s)) {
+            append_line(P_STATUS, "load failed: no session " + id);
+            return;
+        }
+        Window& w = new_window(s.title.empty() ? "chat" : s.title);
+        w.session_id = s.id;
+        w.agent->set_history(s.messages);
+        // Replay the conversation into the scrollback so it's visible.
+        for (const auto& m : s.messages) {
+            if (m.role == "user") append_line(P_USER, "> " + m.content);
+            else if (m.role == "assistant" && !m.content.empty())
+                append_line(P_ASSISTANT, m.content);
+        }
+        append_line(P_STATUS, "loaded session " + s.id);
+        draw();
+    }
+
+    // /load or /sessions picker.
+    void pick_session() {
+        auto metas = store_.list();
+        if (metas.empty()) { append_line(P_STATUS, "no saved sessions"); return; }
+        std::vector<std::string> labels;
+        for (const auto& m : metas)
+            labels.push_back(m.title + "  (" + std::to_string(m.message_count) +
+                             " msgs)");
+        int sel = menu_select("Load session", labels);
+        if (sel >= 0 && sel < static_cast<int>(metas.size()))
+            load_session(metas[sel].id);
+    }
+
+    // ---- window management ---------------------------------------------
+
+    void switch_to(size_t idx) {
+        if (idx >= windows_.size() || idx == active_) return;
+        active_ = idx;
+        draw();
+    }
+
+    void close_window() {
+        if (windows_.size() <= 1) {
+            append_line(P_STATUS, "cannot close the last window");
+            return;
+        }
+        autosave();
+        windows_.erase(windows_.begin() + active_);
+        if (active_ >= windows_.size()) active_ = windows_.size() - 1;
+        draw();
+    }
+
+    // Parse a slash command from the input line. Returns true if handled (so the
+    // caller should not treat it as a prompt).
+    bool handle_slash(const std::string& line) {
+        if (line.empty() || line[0] != '/') return false;
+        std::string cmd, arg;
+        size_t sp = line.find(' ');
+        if (sp == std::string::npos) cmd = line;
+        else { cmd = line.substr(0, sp); arg = line.substr(sp + 1); }
+
+        if (cmd == "/save") { save_session(); }
+        else if (cmd == "/load" || cmd == "/sessions") { pick_session(); }
+        else if (cmd == "/window" || cmd == "/win") {
+            if (arg == "new") { new_window("chat"); draw(); }
+            else if (arg == "close") { close_window(); }
+            else if (arg == "list") {
+                std::string s = "windows:";
+                for (size_t i = 0; i < windows_.size(); ++i)
+                    s += " " + std::to_string(i + 1) + ":" + windows_[i]->title +
+                         (i == active_ ? "*" : "");
+                append_line(P_STATUS, s);
+            } else if (arg.rfind("rename ", 0) == 0) {
+                win().title = arg.substr(7);
+                append_line(P_STATUS, "renamed window to " + win().title);
+                draw();
+            } else {
+                append_line(P_STATUS, "/window new|close|list|rename <name>");
+            }
+        } else {
+            append_line(P_STATUS, "unknown command: " + cmd);
+        }
+        return true;
     }
 
     void help_screen() {
@@ -614,7 +835,14 @@ private:
             "Enter     send the prompt",
             "Ctrl-G    send the prompt",
             "PgUp/PgDn scroll scrollback",
+            "Ctrl-N    new window        Ctrl-W  close window",
+            "Alt+1..9  switch to window N",
             "Ctrl-C    quit",
+            "",
+            "Slash commands:",
+            "  /window new|close|list|rename <name>",
+            "  /save            persist this conversation",
+            "  /load, /sessions pick a saved session to reopen",
             "",
             "Tools: read (paginated), write (patch), search (grep/semantic).",
         });
@@ -726,14 +954,18 @@ private:
 
     agent::Config cfg_;
     agent::ToolRegistry& reg_;
+    agent::SessionStore store_;
     std::string settings_path_ = "cpp-agent.conf";
-    std::vector<std::pair<int, std::string>> lines_;
-    int scroll_top_ = 0;
-    std::string stream_buf_;
-    int stream_color_ = P_ASSISTANT;
-    std::string stream_ts_;         // timestamp captured when a reply begins
-    std::string reason_buf_;        // live thinking text, before folding
-    bool reason_folded_ = false;    // collapsed to a summary line yet?
+
+    // ---- windows (IRC-style switchable conversations) -------------------
+    std::vector<std::unique_ptr<Window>> windows_;
+    size_t active_ = 0;
+
+    // Accessors for the active window's state (all former per-window members
+    // now live on Window).
+    Window& win() { return *windows_[active_]; }
+    const Window& win() const { return *windows_[active_]; }
+
     bool show_reasoning_ = true;    // toggle live thinking display
 
     // ---- BitchX-style status bar state ----------------------------------
