@@ -5,6 +5,7 @@
 #include "agent/prompt.h"
 #include <future>
 #include <stdexcept>
+#include <cctype>
 #include <chrono>
 #include <string>
 
@@ -248,7 +249,21 @@ std::string Agent::run(const std::string& user_prompt) {
             Message review = chat_once(tools);
             history_.push_back(review);
 
-            if (!review.content.empty() && review.content != "looks good" &&
+            // Normalise the review text: strip punctuation, lowercase.
+            auto looks_good = [](const std::string& s) -> bool {
+                for (char c : s) {
+                    char lc = static_cast<char>(std::tolower(
+                        static_cast<unsigned char>(c)));
+                    if (lc != 'l' && lc != 'o' && lc != 'k' && lc != 's' &&
+                        lc != 'g' && lc != 'd' && lc != ' ' && lc != '.' &&
+                        lc != '!' && lc != '\n' && lc != '\r')
+                        return false;
+                }
+                return s.find("looks good") != std::string::npos ||
+                       s.find("looksgood") != std::string::npos;
+            };
+
+            if (!review.content.empty() && !looks_good(review.content) &&
                 !review.tool_calls.is_null()) {
                 // Model chose to do more work — continue the main loop.
                 if (hooks_.on_status) hooks_.on_status("self-review: revising");
@@ -257,7 +272,7 @@ std::string Agent::run(const std::string& user_prompt) {
                 continue;
             }
             // Review passed or had no tool calls — accept the original answer.
-            if (!review.content.empty() && review.content != "looks good")
+            if (!review.content.empty() && !looks_good(review.content))
                 final_reply = review.content;
         }
 
