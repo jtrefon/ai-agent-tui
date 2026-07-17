@@ -228,7 +228,9 @@ std::string Agent::run(const std::string& user_prompt) {
         // If the model replied with text but no tool calls on the first
         // iteration, it likely described intent without acting. Nudge it
         // to actually use tools instead of just talking about them.
-        if (iter == 0 && !reply.content.empty() && reply.tool_calls.is_null()) {
+        bool has_tools = !reply.tool_calls.is_null() &&
+                         !reply.tool_calls.empty();
+        if (iter == 0 && !reply.content.empty() && !has_tools) {
             if (hooks_.on_status) hooks_.on_status("re-prompt: use tools");
             Message nudge;
             nudge.role = "user";
