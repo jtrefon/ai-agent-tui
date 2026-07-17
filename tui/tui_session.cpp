@@ -4,6 +4,9 @@
 #include "tui.h"
 
 #include <ctime>
+#include <cstdlib>
+#include <string>
+#include <vector>
 
 namespace tui {
 
@@ -66,137 +69,218 @@ void Tui::pick_session() {
     session_browser();
 }
 
-static std::string fmt_time(long long ms) {
+namespace {
+
+// Date label for a session: "Today", "Yesterday", or "Mon DD".
+std::string date_label(long long ms) {
     auto t = static_cast<std::time_t>(ms / 1000);
     std::tm tm{};
     localtime_r(&t, &tm);
-    char buf[24];
-    // Today: show HH:MM; yesterday: "yesterday"; older: "MM/DD"
-    std::time_t now = std::time(nullptr);
+    auto now = std::time(nullptr);
     std::tm today{};
     localtime_r(&now, &today);
-    bool same_day = (tm.tm_year == today.tm_year && tm.tm_yday == today.tm_yday);
-    bool yesterday = (tm.tm_year == today.tm_year && tm.tm_yday == today.tm_yday - 1);
-    if (same_day) {
+    if (tm.tm_year == today.tm_year && tm.tm_yday == today.tm_yday)
+        return "Today";
+    if (tm.tm_year == today.tm_year && tm.tm_yday == today.tm_yday - 1)
+        return "Yesterday";
+    char buf[16];
+    std::strftime(buf, sizeof(buf), "%b %d", &tm);
+    return buf;
+}
+
+std::string fmt_time(long long ms) {
+    auto t = static_cast<std::time_t>(ms / 1000);
+    std::tm tm{};
+    localtime_r(&t, &tm);
+    auto now = std::time(nullptr);
+    std::tm today{};
+    localtime_r(&now, &today);
+    char buf[24];
+    if (tm.tm_year == today.tm_year && tm.tm_yday == today.tm_yday) {
         std::strftime(buf, sizeof(buf), "%H:%M", &tm);
-    } else if (yesterday) {
-        std::strncpy(buf, "yesterday", sizeof(buf));
+    } else if (tm.tm_year == today.tm_year && tm.tm_yday == today.tm_yday - 1) {
+        std::strncpy(buf, "yesterday", sizeof(buf) - 1);
     } else {
         std::strftime(buf, sizeof(buf), "%m/%d", &tm);
     }
     return buf;
 }
 
+// Case-insensitive contains.
+bool matches_filter(const std::string& title, const std::string& filter) {
+    if (filter.empty()) return true;
+    auto ci_find = [](const std::string& hay, const std::string& needle) {
+        if (needle.size() > hay.size()) return false;
+        for (size_t h = 0; h <= hay.size() - needle.size(); ++h) {
+            bool ok = true;
+            for (size_t n = 0; n < needle.size() && ok; ++n)
+                if (std::tolower(static_cast<unsigned char>(hay[h + n]))
+                    != std::tolower(static_cast<unsigned char>(needle[n])))
+                    ok = false;
+            if (ok) return true;
+        }
+        return false;
+    };
+    return ci_find(title, filter);
+}
+
+} // namespace
+
 void Tui::session_browser() {
-    auto metas = store_.list();
-    if (metas.empty()) {
+    auto all = store_.list();
+    if (all.empty()) {
         append_line(P_STATUS, "no saved sessions");
         return;
     }
 
     int sh = height(), sw = width();
-    int dw = std::min(sw - 4, 66);
-    int dh = std::min(sh - 4, std::max(static_cast<int>(metas.size()) + 4, 8));
+    int dw = std::min(sw - 4, 70);
+    int dh = std::min(sh - 4, 18);
+    if (dh < 10) dh = 10;
 
     Dialog dlg(dh, dw, "Sessions");
     WINDOW* w = dlg.win();
-    int aw = dlg.cols() - 2;        // content width (inside borders)
-    int ah = dlg.rows() - 2;        // content height
-    int list_h = ah - 1;            // rows for session list (minus footer)
+    int aw = dlg.cols() - 2;       // content width
+    int ah = dlg.rows() - 2;       // content height
+    int list_h = ah - 2;           // rows for list (minus search bar + footer)
 
-    int sel = 0, off = 0;
-    curs_set(0);
+    std::string filter;
+    int sel = 0;
+    int scroll_off = 0;
+    curs_set(1);                   // visible cursor for the search bar
+
+    auto rebuild = [&]() -> std::vector<std::pair<int, int>> {
+        // Returns flat display list: (type, meta_index)
+        // type 0 = date header (meta_index unused), type 1 = session row
+        std::vector<std::pair<int, int>> out;
+        std::string last_date;
+        for (int i = 0; i < static_cast<int>(all.size()); ++i) {
+            if (!matches_filter(all[i].title, filter)) continue;
+            std::string d = date_label(all[i].updated_ms);
+            if (d != last_date) {
+                out.push_back({0, i});  // header
+                last_date = d;
+            }
+            out.push_back({1, i});       // session row
+        }
+        return out;
+    };
 
     bool done = false;
     while (!done) {
-        int n = static_cast<int>(metas.size());
-        if (sel < 0) sel = 0;
-        if (sel >= n) sel = n - 1;
-        if (sel < off) off = sel;
-        if (sel >= off + list_h) off = sel - list_h + 1;
+        auto disp = rebuild();
+        int nd = static_cast<int>(disp.size());
+        if (sel >= nd) sel = std::max(0, nd - 1);
+        if (sel < scroll_off) scroll_off = sel;
+        if (sel >= scroll_off + list_h) scroll_off = sel - list_h + 1;
 
         // Clear content area
-        for (int r = 0; r < ah; ++r) {
+        for (int r = 0; r < ah; ++r)
             mvwaddstr(w, 1 + r, 1, std::string(aw, ' ').c_str());
-        }
 
-        // Render list items
-        int title_w = std::max(18, aw - 34);  // room for model + count + time
-        for (int i = 0; i < list_h && off + i < n; ++i) {
-            int idx = off + i;
-            auto& m = metas[idx];
-            bool cur = (idx == sel);
+        // Render list
+        int title_w = std::max(16, aw - 34);
+        for (int i = 0; i < list_h && scroll_off + i < nd; ++i) {
             int row = 1 + i;
-            int x = 1;
-
-            if (cur) {
-                wattron(w, COLOR_PAIR(P_BUTTON_ACT) | A_BOLD);
-                mvwaddstr(w, row, x, "> ");
+            auto& [typ, idx] = disp[scroll_off + i];
+            if (typ == 0) {
+                // Date header
+                wattron(w, COLOR_PAIR(P_BAR_DIM) | A_BOLD);
+                mvwaddstr(w, row, 1, ("  " + date_label(all[idx].updated_ms)).c_str());
+                wattroff(w, COLOR_PAIR(P_BAR_DIM) | A_BOLD);
             } else {
-                wattron(w, COLOR_PAIR(P_ASSISTANT));
-                mvwaddstr(w, row, x, "  ");
+                bool cur = (scroll_off + i == sel);
+                int x = 1;
+                if (cur) {
+                    wattron(w, COLOR_PAIR(P_BUTTON_ACT) | A_BOLD);
+                    mvwaddstr(w, row, x, "> ");
+                } else {
+                    wattron(w, COLOR_PAIR(P_ASSISTANT));
+                    mvwaddstr(w, row, x, "  ");
+                }
+                x += 2;
+                auto& m = all[idx];
+                std::string title = m.title;
+                if (static_cast<int>(title.size()) > title_w)
+                    title = title.substr(0, title_w - 1) + "\u2026";
+                mvwaddnstr(w, row, x, title.c_str(), title_w);
+                x += title_w + 1;
+                std::string mod = m.model;
+                if (mod.size() > 10) mod = mod.substr(0, 9) + "\u2026";
+                mvwaddstr(w, row, x, mod.c_str());
+                x += static_cast<int>(mod.size()) + 1;
+                char cnt[16];
+                std::snprintf(cnt, sizeof(cnt), "%d msgs", m.message_count);
+                mvwaddstr(w, row, x, cnt);
+                std::string ts = fmt_time(m.updated_ms);
+                mvwaddstr(w, row, aw - static_cast<int>(ts.size()) + 1, ts.c_str());
+                if (cur) wattroff(w, COLOR_PAIR(P_BUTTON_ACT) | A_BOLD);
+                else wattroff(w, COLOR_PAIR(P_ASSISTANT));
             }
-            x += 2;
-
-            // Title (truncated)
-            std::string title = m.title;
-            if (static_cast<int>(title.size()) > title_w)
-                title = title.substr(0, title_w - 1) + "\u2026";
-            mvwaddnstr(w, row, x, title.c_str(), title_w);
-            x += title_w + 1;
-
-            // Model (short)
-            std::string mod = m.model;
-            if (mod.size() > 10) mod = mod.substr(0, 9) + "\u2026";
-            mvwaddstr(w, row, x, mod.c_str());
-            x += static_cast<int>(mod.size()) + 1;
-
-            // Message count
-            char cnt[16];
-            std::snprintf(cnt, sizeof(cnt), "%d msgs", m.message_count);
-            mvwaddstr(w, row, x, cnt);
-
-            // Time (right-aligned)
-            std::string ts = fmt_time(m.updated_ms);
-            mvwaddstr(w, row, aw - static_cast<int>(ts.size()) + 1, ts.c_str());
-
-            if (cur) wattroff(w, COLOR_PAIR(P_BUTTON_ACT) | A_BOLD);
-            else wattroff(w, COLOR_PAIR(P_ASSISTANT));
         }
+
+        // Search bar
+        std::string search_prompt = "/ " + filter;
+        wattron(w, COLOR_PAIR(P_STATUS));
+        mvwaddstr(w, ah - 1, 1, std::string(aw, ' ').c_str());
+        mvwaddnstr(w, ah - 1, 1, search_prompt.c_str(), aw);
+        wmove(w, ah - 1, 2 + static_cast<int>(filter.size()));
+        wattroff(w, COLOR_PAIR(P_STATUS));
 
         // Footer hint
         wattron(w, A_DIM);
-        mvwaddstr(w, ah, 1, "\u2191\u2193 nav  Enter load  Del remove  Esc back");
+        mvwaddstr(w, ah, 1, "\u2191\u2193 nav  Enter load  Del remove  / search  Esc back");
         wattroff(w, A_DIM);
 
         update_panels();
         doupdate();
 
         int c = wgetch(w);
-        switch (c) {
-            case KEY_DOWN: case '\t': ++sel; break;
-            case KEY_UP: case KEY_BTAB: --sel; break;
-            case KEY_NPAGE: sel += list_h; break;
-            case KEY_PPAGE: sel -= list_h; break;
-            case '\n': case '\r': case KEY_ENTER:
-                load_session(metas[sel].id);
-                done = true;
-                break;
-            case KEY_DC: case 'd': {
-                // Confirm delete
-                std::string prompt = "Delete \"" + metas[sel].title + "\"?";
-                int ch = menu_select(prompt, {"Cancel", "Delete"});
-                if (ch == 1) {
-                    store_.remove(metas[sel].id);
-                    metas.erase(metas.begin() + sel);
-                    if (metas.empty()) {
-                        append_line(P_STATUS, "no saved sessions");
-                        done = true;
+        if (c >= 32 && c <= 126) {
+            filter += static_cast<char>(c);
+            sel = 0;
+            scroll_off = 0;
+        } else if ((c == KEY_BACKSPACE || c == 127 || c == 8) && !filter.empty()) {
+            filter.pop_back();
+            sel = 0;
+            scroll_off = 0;
+        } else {
+            switch (c) {
+                case KEY_DOWN: ++sel; break;
+                case KEY_UP: --sel; break;
+                case KEY_NPAGE: sel += list_h; break;
+                case KEY_PPAGE: sel -= list_h; break;
+                case '\n': case '\r': case KEY_ENTER:
+                    // Find which session is under the cursor
+                    for (int i = sel; i >= 0; --i)
+                        if (disp[i].first == 1) {
+                            load_session(all[disp[i].second].id);
+                            done = true;
+                            break;
+                        }
+                    break;
+                case KEY_DC: case 'd': {
+                    // Find which session is under the cursor for deletion
+                    int del_idx = -1;
+                    for (int i = sel; i >= 0; --i)
+                        if (disp[i].first == 1) { del_idx = disp[i].second; break; }
+                    if (del_idx >= 0) {
+                        std::string prompt = "Delete \"" + all[del_idx].title + "\"?";
+                        int ch = menu_select(prompt, {"Cancel", "Delete"});
+                        if (ch == 1) {
+                            store_.remove(all[del_idx].id);
+                            all.erase(all.begin() + del_idx);
+                            sel = 0; scroll_off = 0;
+                            if (all.empty()) {
+                                append_line(P_STATUS, "no saved sessions");
+                                done = true;
+                            }
+                        }
                     }
+                    break;
                 }
-                break;
+                case 27: case 'q': done = true; break;
             }
-            case 27: case 'q': done = true; break;
         }
     }
 
