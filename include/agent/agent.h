@@ -12,27 +12,9 @@
 #include "agent/config.h"
 #include "agent/registry.h"
 #include "agent/llm.h"
+#include "agent/conversation_log.h"
 
 namespace agent {
-
-// Appends conversation events to a JSON Lines file for telemetry/audit. Each
-// call writes one self-contained JSON object with a unix-millisecond timestamp
-// and a session id. No-op (and cheap) when logging is disabled.
-class ConversationLog {
-public:
-    // path may contain "{ts}", replaced with the session start timestamp.
-    void open(const std::string& path);
-    bool enabled() const { return out_.is_open(); }
-    const std::string& session() const { return session_; }
-
-    // event: "session_start", "user", "assistant", "reasoning",
-    //        "tool_call", "tool_result", "error", "session_end".
-    void event(const std::string& type, const json& fields);
-
-private:
-    std::ofstream out_;
-    std::string session_;
-};
 
 // Coarse activity state for a status-bar connection indicator.
 enum class RunState {
@@ -110,6 +92,12 @@ private:
     // Ask the host to approve an approval-gated tool call. Returns true if the
     // call may proceed. Records session-wide grants in session_approved_.
     bool approve_call(const Tool& tool, const json& args);
+
+    // Execute every requested tool call, recording results into history_.
+    void dispatch_tool_calls(const json& calls, std::vector<Tool*>&);
+
+    // One model round-trip (stream or buffered) with live token/state hooks.
+    Message chat_once(std::vector<Tool*>& tools);
 
     Config cfg_;
     ToolRegistry& registry_;

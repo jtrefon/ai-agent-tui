@@ -18,6 +18,53 @@
 
 namespace agent {
 
+namespace {
+constexpr int kMaxTimeout = 3600;          // 1 hour ceiling
+constexpr size_t kMaxOutput = 64 * 1024;   // 64 KiB cap
+
+// Drain buffered output from the read end of a pipe, up to kMaxOutput bytes.
+void drain_output(int fd, std::string& out) {
+    std::array<char, 4096> buf{};
+    ssize_t n;
+    while ((n = read(fd, buf.data(), buf.size())) > 0) {
+        if (out.size() < kMaxOutput) out.append(buf.data(), static_cast<size_t>(n));
+    }
+}
+
+// Parent-side read loop: copy pipe output until EOF or the wall-clock deadline,
+// killing the child's process group on timeout. Returns true if the deadline hit.
+bool run_with_timeout(int fd, pid_t pid, int timeout_s, std::string& out,
+                     bool& child_done) {
+    const long deadline_ms = timeout_s * 1000L;
+    long elapsed_ms = 0;
+    const int poll_ms = 50;
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
+    std::array<char, 4096> buf{};
+    while (true) {
+        ssize_t n = read(fd, buf.data(), buf.size());
+        if (n > 0) {
+            if (out.size() < kMaxOutput)
+                out.append(buf.data(), static_cast<size_t>(n));
+            continue;
+        }
+        if (n == 0) break;  // EOF: child closed the pipe
+        if (errno != EAGAIN && errno != EWOULDBLOCK) break;
+
+        int status = 0;
+        if (waitpid(pid, &status, WNOHANG) == pid) { child_done = true; break; }
+        if (elapsed_ms >= deadline_ms) {
+            kill(-pid, SIGKILL);
+            return true;
+        }
+        usleep(poll_ms * 1000);
+        elapsed_ms += poll_ms;
+    }
+    return false;
+}
+} // namespace
+
 // bash: run a shell command inside the workspace root and return its combined
 // stdout+stderr and exit status. Args:
 //   command  (string, required) the command line, run via `sh -c`
@@ -74,7 +121,6 @@ public:
         if (timeout > kMaxTimeout) timeout = kMaxTimeout;
 
         std::string cwd = Workspace::root();
-
         int pipefd[2];
         if (pipe(pipefd) != 0) {
             r.ok = false; r.error = "pipe failed"; return r;
@@ -105,50 +151,13 @@ public:
         setpgid(pid, pid);  // race-free with the child also setting it
 
         std::string output;
-        bool timed_out = false;
-        const long deadline_ms = timeout * 1000L;
-        long elapsed_ms = 0;
-        const int poll_ms = 50;
-
-        int flags = fcntl(pipefd[0], F_GETFL, 0);
-        fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
-
-        std::array<char, 4096> buf{};
         bool child_done = false;
-        while (true) {
-            ssize_t n = read(pipefd[0], buf.data(), buf.size());
-            if (n > 0) {
-                if (output.size() < kMaxOutput)
-                    output.append(buf.data(), static_cast<size_t>(n));
-                continue;  // drain fast while data is flowing
-            }
-            if (n == 0) break;  // EOF: child closed the pipe
+        bool timed_out = run_with_timeout(pipefd[0], pid, timeout, output, child_done);
 
-            // n < 0
-            if (errno != EAGAIN && errno != EWOULDBLOCK) break;
-
-            int status = 0;
-            pid_t w = waitpid(pid, &status, WNOHANG);
-            if (w == pid) { child_done = true; break; }
-
-            if (elapsed_ms >= deadline_ms) {
-                timed_out = true;
-                kill(-pid, SIGKILL);
-                break;
-            }
-            usleep(poll_ms * 1000);
-            elapsed_ms += poll_ms;
-        }
-
-        // Reap the child (and drain any final bytes on clean exit).
+        // Reap the child (grab any final bytes on clean exit).
         int status = 0;
         if (!child_done) {
-            // Grab any last output then wait.
-            ssize_t n;
-            while ((n = read(pipefd[0], buf.data(), buf.size())) > 0) {
-                if (output.size() < kMaxOutput)
-                    output.append(buf.data(), static_cast<size_t>(n));
-            }
+            drain_output(pipefd[0], output);
             waitpid(pid, &status, 0);
         }
         close(pipefd[0]);
@@ -178,10 +187,6 @@ public:
         if (!r.ok) r.error = "command exited with status " + std::to_string(code);
         return r;
     }
-
-private:
-    static constexpr int kMaxTimeout = 3600;              // 1 hour ceiling
-    static constexpr size_t kMaxOutput = 64 * 1024;       // 64 KiB cap
 };
 
 std::unique_ptr<Tool> make_bash_tool() {

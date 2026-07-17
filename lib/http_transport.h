@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Jacek Trefon (www.trefon.com)
+
+#ifndef AGENT_HTTP_TRANSPORT_H
+#define AGENT_HTTP_TRANSPORT_H
+
+#include "agent/config.h"
+#include "agent/llm.h"
+#include "agent/sse_parser.h"
+#include <curl/curl.h>
+#include <string>
+
+namespace agent {
+
+// RAII wrapper around a curl_slist of request headers.
+struct HeaderList {
+    curl_slist* list = nullptr;
+    ~HeaderList();
+    void add(const std::string& h) {
+        list = curl_slist_append(list, h.c_str());
+    }
+};
+
+void apply_auth(HeaderList& h, const Config& cfg);
+
+// POST `payload` to the chat endpoint; return the raw response body (or throw on
+// transport error). `accept_sse` adds the text/event-stream Accept header.
+// `ttfb`/`total` receive transfer timings in seconds when non-null.
+std::string post_completion(const Config& cfg, const std::string& payload,
+                            bool accept_sse, double* ttfb, double* total);
+
+// Run a streaming completion: POST `payload`, feed SSE bytes to `parser`, and
+// finalize. Fills `stats` (timings + token counts). Throws on transport error.
+void stream_completion(const Config& cfg, const std::string& payload,
+                       StreamParser& parser, Stats* stats, long& status_out);
+
+// Parse a buffered /chat/completions JSON body into a Message, throwing on a
+// malformed or error response.
+Message message_from_completion(const std::string& response);
+
+} // namespace agent
+
+#endif // AGENT_HTTP_TRANSPORT_H

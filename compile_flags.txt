@@ -1,3 +1,6 @@
 -Iinclude
+-Isrc
+-Itools
+-I.
 -std=c++17
 -Wall

@@ -1,0 +1,8 @@
+CompileFlags:
+  Standard: c++17
+  Add:
+    - -Iinclude
+    - -Isrc
+    - -Itools
+    - -I.
+    - -Wall

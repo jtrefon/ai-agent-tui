@@ -23,10 +23,16 @@ SRC_DIR   = @srcdir@
 BUILD_DIR = @builddir@
 
 LIB_OBJS  = $(BUILD_DIR)/lib/config.o \
-            $(BUILD_DIR)/lib/llm.o \
-            $(BUILD_DIR)/lib/registry.o \
-            $(BUILD_DIR)/lib/prompt.o \
-            $(BUILD_DIR)/lib/agent.o \
+             $(BUILD_DIR)/lib/llm.o \
+             $(BUILD_DIR)/lib/debug_log.o \
+             $(BUILD_DIR)/lib/request_builder.o \
+             $(BUILD_DIR)/lib/sse_parser.o \
+             $(BUILD_DIR)/lib/http_transport.o \
+             $(BUILD_DIR)/lib/model_probe.o \
+             $(BUILD_DIR)/lib/registry.o \
+             $(BUILD_DIR)/lib/prompt.o \
+             $(BUILD_DIR)/lib/conversation_log.o \
+             $(BUILD_DIR)/lib/agent.o \
             $(BUILD_DIR)/lib/statusbar.o \
             $(BUILD_DIR)/lib/session.o \
             $(BUILD_DIR)/lib/workspace.o \
@@ -35,12 +41,20 @@ LIB_OBJS  = $(BUILD_DIR)/lib/config.o \
             $(BUILD_DIR)/tools/write_tool.o \
             $(BUILD_DIR)/tools/search_tool.o \
             $(BUILD_DIR)/tools/bash_tool.o \
-            $(BUILD_DIR)/tools/search/grep_backend.o \
-            $(BUILD_DIR)/tools/search/semantic_backend.o
+             $(BUILD_DIR)/tools/search/grep_backend.o \
+             $(BUILD_DIR)/tools/search/semantic_backend.o \
+             $(BUILD_DIR)/tools/search/semantic_index.o
 
 CLI_OBJ   = $(BUILD_DIR)/src/main.o
 TUI_OBJS  = $(BUILD_DIR)/tui/tui.o \
-            $(BUILD_DIR)/tui/widgets.o \
+            $(BUILD_DIR)/tui/tui_render.o \
+            $(BUILD_DIR)/tui/tui_input.o \
+            $(BUILD_DIR)/tui/tui_session.o \
+            $(BUILD_DIR)/tui/tui_main.o \
+            $(BUILD_DIR)/tui/dialog.o \
+            $(BUILD_DIR)/tui/form_edit.o \
+            $(BUILD_DIR)/tui/info_dialog.o \
+            $(BUILD_DIR)/tui/menu_select.o \
             $(BUILD_DIR)/tui/textutil.o \
             $(BUILD_DIR)/tui/palette.o \
             $(BUILD_DIR)/tui/welcome.o

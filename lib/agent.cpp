@@ -10,37 +10,27 @@
 namespace agent {
 
 namespace {
-long long now_ms() {
-    using namespace std::chrono;
-    return duration_cast<milliseconds>(system_clock::now().time_since_epoch())
-        .count();
+// Parse one OpenAI tool_call delta into its id/name/args triple. The arguments
+// field may arrive as a JSON string (streaming fragments) and is parsed here.
+void parse_tool_call(const json& call, std::string& id, std::string& fn,
+                     json& args) {
+    auto str_or = [](const json& j, const char* k,
+                     const std::string& d) -> std::string {
+        auto it = j.find(k);
+        return (it != j.end() && it->is_string()) ? it->get<std::string>() : d;
+    };
+    json fnobj = call.contains("function") && call["function"].is_object()
+                     ? call["function"] : json::object();
+    id = str_or(call, "id", "");
+    fn = str_or(fnobj, "name", "");
+    args = fnobj.contains("arguments") && !fnobj["arguments"].is_null()
+               ? fnobj["arguments"] : json::object();
+    if (args.is_string()) {
+        try { args = json::parse(args.get<std::string>()); }
+        catch (...) { args = json::object(); }
+    }
 }
 } // namespace
-
-void ConversationLog::open(const std::string& path) {
-    if (path.empty()) return;
-    session_ = std::to_string(now_ms());
-    std::string resolved = path;
-    const std::string tok = "{ts}";
-    size_t pos = resolved.find(tok);
-    if (pos != std::string::npos)
-        resolved.replace(pos, tok.size(), session_);
-    out_.open(resolved, std::ios::app);
-    if (out_.is_open())
-        event("session_start", {{"session", session_}});
-}
-
-void ConversationLog::event(const std::string& type, const json& fields) {
-    if (!out_.is_open()) return;
-    json rec = fields;
-    rec["ts"] = now_ms();
-    rec["session"] = session_;
-    rec["event"] = type;
-    // Model output can contain invalid UTF-8 (e.g. a multibyte char split
-    // across stream fragments); replace bad bytes instead of throwing.
-    out_ << rec.dump(-1, ' ', false, json::error_handler_t::replace) << '\n';
-    out_.flush();
-}
 
 Agent::Agent(const Config& cfg, ToolRegistry& registry, AgentHooks hooks)
     : cfg_(cfg), registry_(registry), client_(cfg), hooks_(std::move(hooks)) {}
@@ -79,6 +69,73 @@ bool Agent::approve_call(const Tool& tool, const json& args) {
     return d == Approval::AllowOnce;
 }
 
+// Execute every requested tool call, recording results back into the
+// conversation history so the model can consume them on the next iteration.
+void Agent::dispatch_tool_calls(const json& calls, std::vector<Tool*>&) {
+    for (const auto& call : calls) {
+        std::string id, fn;
+        json args;
+        parse_tool_call(call, id, fn, args);
+        if (hooks_.on_tool_call) hooks_.on_tool_call(fn, args);
+        log_.event("tool_call", {{"name", fn}, {"id", id}, {"args", args}});
+
+        Tool* tool = registry_.find(fn);
+        ToolResult res;
+        if (!tool) {
+            res.ok = false;
+            res.error = "unknown tool: " + fn;
+        } else if (tool->requires_approval() && !session_approved_.count(fn) &&
+                   !approve_call(*tool, args)) {
+            // Denied (or no approval handler installed). Report back so the
+            // model can adapt instead of silently failing.
+            res.ok = false;
+            res.error = "denied by user: the " + fn + " tool was not approved";
+            log_.event("tool_denied", {{"name", fn}, {"id", id}, {"args", args}});
+        } else {
+            try { res = tool->execute(args); }
+            catch (const std::exception& e) {
+                res.ok = false;
+                res.error = std::string("tool threw: ") + e.what();
+            }
+        }
+        if (hooks_.on_tool_result) hooks_.on_tool_result(fn, res);
+        log_.event("tool_result", {{"name", fn}, {"id", id},
+                                    {"ok", res.ok},
+                                    {"output", res.ok ? res.output : res.error}});
+
+        Message tool_msg;
+        tool_msg.role = "tool";
+        tool_msg.tool_call_id = id;
+        tool_msg.name = fn;
+        tool_msg.content = res.ok ? res.output : ("ERROR: " + res.error);
+        history_.push_back(tool_msg);
+    }
+}
+
+Message Agent::chat_once(std::vector<Tool*>& tools) {
+    Message reply;
+    Stats stats;
+    if (hooks_.on_state) hooks_.on_state(RunState::Waiting);
+    if (cfg_.stream) {
+        reply = client_.chat_stream(history_, tools,
+            [this](const StreamChunk& ch) {
+                if (ch.done) return;
+                if (!ch.reasoning.empty()) {
+                    if (hooks_.on_state) hooks_.on_state(RunState::Thinking);
+                    if (hooks_.on_reasoning) hooks_.on_reasoning(ch.reasoning);
+                }
+                if (!ch.delta.empty()) {
+                    if (hooks_.on_state) hooks_.on_state(RunState::Streaming);
+                    if (hooks_.on_token) hooks_.on_token(ch.delta);
+                }
+            }, &stats);
+    } else {
+        reply = client_.chat(history_, tools, &stats);
+    }
+    if (stats.valid && hooks_.on_stats) hooks_.on_stats(stats);
+    return reply;
+}
+
 void Agent::reset() {
     history_.clear();
     session_approved_.clear();
@@ -96,34 +153,14 @@ std::string Agent::run(const std::string& user_prompt) {
     user_msg.content = user_prompt;
     history_.push_back(user_msg);
 
-    std::vector<Tool*> tools;
-    for (const auto& t : registry_.tools()) tools.push_back(t.get());
-
     std::string final_reply;
     auto set_state = [this](RunState s) { if (hooks_.on_state) hooks_.on_state(s); };
 
-    for (int iter = 0; iter < cfg_.max_tool_iterations; ++iter) {
-        Message reply;
-        Stats stats;
-        set_state(RunState::Waiting);
-        if (cfg_.stream) {
-            reply = client_.chat_stream(history_, tools,
-                [this, &set_state](const StreamChunk& ch) {
-                    if (ch.done) return;
-                    if (!ch.reasoning.empty()) {
-                        set_state(RunState::Thinking);
-                        if (hooks_.on_reasoning) hooks_.on_reasoning(ch.reasoning);
-                    }
-                    if (!ch.delta.empty()) {
-                        set_state(RunState::Streaming);
-                        if (hooks_.on_token) hooks_.on_token(ch.delta);
-                    }
-                }, &stats);
-        } else {
-            reply = client_.chat(history_, tools, &stats);
-        }
-        if (stats.valid && hooks_.on_stats) hooks_.on_stats(stats);
+    std::vector<Tool*> tools;
+    for (const auto& t : registry_.tools()) tools.push_back(t.get());
 
+    for (int iter = 0; iter < cfg_.max_tool_iterations; ++iter) {
+        Message reply = chat_once(tools);
         // Persist the assistant turn (including any tool_calls).
         history_.push_back(reply);
         if (!reply.reasoning.empty())
@@ -132,61 +169,7 @@ std::string Agent::run(const std::string& user_prompt) {
         if (reply.content.empty() && !reply.tool_calls.is_null()) {
             set_state(RunState::Tooling);
             if (hooks_.on_status) hooks_.on_status("assistant requested tools");
-            // Dispatch each tool call.
-            for (const auto& call : reply.tool_calls) {
-                auto str_or = [](const json& j, const char* k,
-                                 const std::string& d) -> std::string {
-                    auto it = j.find(k);
-                    return (it != j.end() && it->is_string())
-                               ? it->get<std::string>() : d;
-                };
-                json fnobj = call.contains("function") && call["function"].is_object()
-                                 ? call["function"] : json::object();
-                std::string id = str_or(call, "id", "");
-                std::string fn = str_or(fnobj, "name", "");
-                json args = fnobj.contains("arguments") && !fnobj["arguments"].is_null()
-                                ? fnobj["arguments"] : json::object();
-                if (args.is_string()) {
-                    try { args = json::parse(args.get<std::string>()); }
-                    catch (...) { args = json::object(); }
-                }
-                if (hooks_.on_tool_call) hooks_.on_tool_call(fn, args);
-                log_.event("tool_call", {{"name", fn}, {"id", id}, {"args", args}});
-
-                Tool* tool = registry_.find(fn);
-                ToolResult res;
-                if (!tool) {
-                    res.ok = false;
-                    res.error = "unknown tool: " + fn;
-                } else if (tool->requires_approval() &&
-                           !session_approved_.count(fn) &&
-                           !approve_call(*tool, args)) {
-                    // Denied (or no approval handler installed). Report back so
-                    // the model can adapt instead of silently failing.
-                    res.ok = false;
-                    res.error = "denied by user: the " + fn +
-                                " tool was not approved to run";
-                    log_.event("tool_denied", {{"name", fn}, {"id", id},
-                                               {"args", args}});
-                } else {
-                    try { res = tool->execute(args); }
-                    catch (const std::exception& e) {
-                        res.ok = false;
-                        res.error = std::string("tool threw: ") + e.what();
-                    }
-                }
-                if (hooks_.on_tool_result) hooks_.on_tool_result(fn, res);
-                log_.event("tool_result", {{"name", fn}, {"id", id},
-                                           {"ok", res.ok},
-                                           {"output", res.ok ? res.output : res.error}});
-
-                Message tool_msg;
-                tool_msg.role = "tool";
-                tool_msg.tool_call_id = id;
-                tool_msg.name = fn;
-                tool_msg.content = res.ok ? res.output : ("ERROR: " + res.error);
-                history_.push_back(tool_msg);
-            }
+            dispatch_tool_calls(reply.tool_calls, tools);
             continue;  // loop back to let the model consume results
         }
 
@@ -196,6 +179,7 @@ std::string Agent::run(const std::string& user_prompt) {
         log_.event("assistant", {{"content", final_reply}});
         break;
     }
+
 
     if (final_reply.empty()) {
         final_reply = "[agent stopped: maximum tool iterations reached]";

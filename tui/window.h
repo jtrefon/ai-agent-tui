@@ -22,6 +22,7 @@ struct Window {
     std::string session_id;          // set once persisted / loaded
     bool dirty = false;              // has unsaved changes since last save
     bool read_only = false;          // welcome / log window: typing spawns chat
+    bool welcome_art = false;        // renders via welcome::render() instead of lines
 
     std::unique_ptr<agent::Agent> agent;  // retains conversation across turns
 
