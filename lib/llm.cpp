@@ -46,6 +46,78 @@ size_t LLMClient::write_cb(void* ptr, size_t size, size_t nmemb, void* user) {
     return size * nmemb;
 }
 
+ServerInfo LLMClient::parse_models(const std::string& body) {
+    ServerInfo info;
+    json j = json::parse(body, nullptr, false);
+    if (j.is_discarded()) return info;
+
+    // llama.cpp / OpenAI shape: {"data":[{"id":..,"meta":{"n_ctx":..}}]}
+    const json* entry = nullptr;
+    if (j.contains("data") && j["data"].is_array() && !j["data"].empty())
+        entry = &j["data"][0];
+    else if (j.contains("models") && j["models"].is_array() &&
+             !j["models"].empty())
+        entry = &j["models"][0];
+    if (!entry) return info;
+
+    const json& e = *entry;
+    if (e.contains("id") && e["id"].is_string())
+        info.model = e["id"].get<std::string>();
+    else if (e.contains("model") && e["model"].is_string())
+        info.model = e["model"].get<std::string>();
+    else if (e.contains("name") && e["name"].is_string())
+        info.model = e["name"].get<std::string>();
+
+    // Context window lives under meta (llama.cpp): n_ctx (loaded) and
+    // n_ctx_train (model max). Accept a top-level n_ctx as a fallback too.
+    auto read_int = [](const json& o, const char* k) -> int {
+        auto it = o.find(k);
+        return (it != o.end() && it->is_number_integer())
+                   ? it->get<int>() : 0;
+    };
+    if (e.contains("meta") && e["meta"].is_object()) {
+        const json& m = e["meta"];
+        info.context_size = read_int(m, "n_ctx");
+        info.context_train = read_int(m, "n_ctx_train");
+    }
+    if (info.context_size == 0) info.context_size = read_int(e, "n_ctx");
+    if (info.context_train == 0) info.context_train = read_int(e, "n_ctx_train");
+
+    info.ok = !info.model.empty() || info.context_size > 0;
+    return info;
+}
+
+ServerInfo LLMClient::probe_server() const {
+    std::string response;
+    CURL* c = curl_easy_init();
+    if (!c) return {};
+
+    struct curl_slist* headers = nullptr;
+    if (!cfg_.api_key.empty()) {
+        std::string auth = "Authorization: Bearer " + cfg_.api_key;
+        headers = curl_slist_append(headers, auth.c_str());
+    }
+
+    curl_easy_setopt(c, CURLOPT_URL, cfg_.models_url().c_str());
+    if (headers) curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(c, CURLOPT_HTTPGET, 1L);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_cb);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(c, CURLOPT_TIMEOUT, 5L);
+    curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 3L);
+
+    CURLcode rc = curl_easy_perform(c);
+    if (headers) curl_slist_free_all(headers);
+    curl_easy_cleanup(c);
+    if (rc != CURLE_OK) {
+        debug_log(cfg_.debug_log, "probe-error",
+                  std::string(curl_easy_strerror(rc)));
+        return {};
+    }
+    debug_log(cfg_.debug_log, "probe", response);
+    return parse_models(response);
+}
+
 json LLMClient::build_body(const std::vector<Message>& messages,
                            const std::vector<Tool*>& tools, bool stream) const {
     json body = {
@@ -414,6 +486,19 @@ Message LLMClient::chat_stream(
             stats->tps = stats->completion_tokens / gen;
     }
     return out;
+}
+
+ServerInfo apply_server_autodetect(Config& cfg) {
+    LLMClient client(cfg);
+    ServerInfo info = client.probe_server();
+    if (!info.ok) return info;
+    if (!cfg.model_explicit && !info.model.empty()) {
+        cfg.model = info.model;
+    }
+    if (!cfg.context_explicit && info.context_size > 0) {
+        cfg.context_size = info.context_size;
+    }
+    return info;
 }
 
 } // namespace agent

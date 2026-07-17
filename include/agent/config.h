@@ -34,9 +34,16 @@ struct Config {
     bool show_reasoning = true;          // render thinking live in the UI
 
     // Model context window (n_ctx) in tokens. Used by UIs to render a
-    // context-usage gauge (prompt_tokens vs this). Servers rarely advertise it,
-    // so it is user-configured. <=0 hides the gauge. Env: CPP_AGENT_CONTEXT.
+    // context-usage gauge (prompt_tokens vs this). May be auto-detected from the
+    // server's /v1/models endpoint on startup. <=0 hides the gauge.
+    // Env: CPP_AGENT_CONTEXT.
     int context_size = 8192;
+
+    // Set true when model / context_size were provided explicitly (config file,
+    // env, or CLI flag). Startup auto-detection only fills values that were NOT
+    // set explicitly, so the user always wins.
+    bool model_explicit = false;
+    bool context_explicit = false;
 
     // Compatibility fallback for OpenAI o-series / vLLM style servers that use
     // the reasoning_effort field instead of a jinja kwarg: "off" disables it.
@@ -59,6 +66,7 @@ struct Config {
     void apply_environment();
 
     std::string api_url() const { return api_base + "/chat/completions"; }
+    std::string models_url() const { return api_base + "/models"; }
 };
 
 } // namespace agent

@@ -28,6 +28,15 @@ struct StreamChunk {
     json tool_calls;                     // incremental tool_call fragments (if any)
 };
 
+// Capabilities discovered from the server's /v1/models endpoint. Fields are
+// empty / <=0 when the server did not report them.
+struct ServerInfo {
+    bool ok = false;            // a model entry was successfully parsed
+    std::string model;          // model id (e.g. the gguf name / alias)
+    int context_size = 0;       // n_ctx (loaded context window), 0 if unknown
+    int context_train = 0;      // n_ctx_train (model's native max), 0 if unknown
+};
+
 // Per-request telemetry, surfaced to UIs for the status bar. Filled in after a
 // chat/chat_stream call completes. Fields are -1/0 when unknown.
 struct Stats {
@@ -45,6 +54,15 @@ struct Stats {
 class LLMClient {
 public:
     explicit LLMClient(const Config& cfg);
+
+    // Query the server's GET /v1/models endpoint and report the first model's
+    // id and context window (n_ctx). Never throws: on any transport/parse
+    // failure it returns a ServerInfo with ok == false.
+    ServerInfo probe_server() const;
+
+    // Parse a /v1/models JSON body into ServerInfo. Exposed (and static) so the
+    // extraction logic can be unit-tested without a live server.
+    static ServerInfo parse_models(const std::string& body);
 
     // Buffered request: returns the full assistant message (may include
     // tool_calls). Throws std::runtime_error on transport/API failure. When
@@ -70,6 +88,12 @@ private:
 
     static size_t write_cb(void* ptr, size_t size, size_t nmemb, void* user);
 };
+
+// Probe the configured server and fill in any auto-detectable Config values
+// (model, context_size) that were NOT set explicitly by the user. Returns the
+// ServerInfo probed (ok == false if the server was unreachable). Safe to call
+// once at startup; never throws.
+ServerInfo apply_server_autodetect(Config& cfg);
 
 } // namespace agent
 

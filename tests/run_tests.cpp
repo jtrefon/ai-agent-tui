@@ -290,6 +290,38 @@ TEST(search_tool_mode_switch) {
 }
 
 // ---------------------------------------------------------------------------
+// Server auto-detection: /v1/models parsing (pure, no network)
+// ---------------------------------------------------------------------------
+
+TEST(probe_parse_llamacpp_models) {
+    // Real llama.cpp /v1/models shape (trimmed): id + meta.n_ctx/n_ctx_train.
+    std::string body = R"({"object":"list","data":[{"id":"Qwopus3.6-27B.gguf",)"
+        R"("object":"model","owned_by":"llamacpp","meta":{"n_vocab":248320,)"
+        R"("n_ctx":262144,"n_ctx_train":262144,"n_embd":5120}}]})";
+    agent::ServerInfo info = agent::LLMClient::parse_models(body);
+    ASSERT_TRUE(info.ok);
+    ASSERT_EQ(info.model, "Qwopus3.6-27B.gguf");
+    ASSERT_EQ(info.context_size, 262144);
+    ASSERT_EQ(info.context_train, 262144);
+}
+
+TEST(probe_parse_models_array_fallback) {
+    // Ollama-ish {"models":[{"name":..,"n_ctx":..}]} fallback shape.
+    std::string body =
+        R"({"models":[{"name":"llama-3.2-3b","n_ctx":8192}]})";
+    agent::ServerInfo info = agent::LLMClient::parse_models(body);
+    ASSERT_TRUE(info.ok);
+    ASSERT_EQ(info.model, "llama-3.2-3b");
+    ASSERT_EQ(info.context_size, 8192);
+}
+
+TEST(probe_parse_models_malformed_is_not_ok) {
+    ASSERT_FALSE(agent::LLMClient::parse_models("not json").ok);
+    ASSERT_FALSE(agent::LLMClient::parse_models("{}").ok);
+    ASSERT_FALSE(agent::LLMClient::parse_models(R"({"data":[]})").ok);
+}
+
+// ---------------------------------------------------------------------------
 // Status-bar rendering math (pure, no ncurses / no network)
 // ---------------------------------------------------------------------------
 

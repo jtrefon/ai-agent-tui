@@ -53,6 +53,7 @@ public:
         banner("cpp-agent - F1 help  F2 config  F3 thinking  F10 settings  "
                "Enter send  PgUp/PgDn scroll  Ctrl-C quit");
         draw_input("");
+        detect_server(false);   // auto-fill model/context from the server
 
         // Wake once a second even without input so the status-bar clock ticks.
         // This is a blocking poll with a 1s timeout, not a busy loop: idle CPU
@@ -628,30 +629,77 @@ private:
             "api_key:   " + mask(cfg_.api_key),
             "model:     " + cfg_.model,
             "stream:    " + std::string(cfg_.stream ? "on" : "off"),
-            "context:   " + std::to_string(cfg_.context_size) + " tokens",
+            "context:   " + std::to_string(cfg_.context_size) + " tokens" +
+                (last_detected_.ok ? " (auto-detected)" : ""),
             "max_iter:  " + std::to_string(cfg_.max_tool_iterations),
             "system:    " + cfg_.system_prompt_path,
             "tools:     " + cfg_.tools_prompt_path,
         });
     }
 
-    // Server settings using a native libform dialog.
+    // Probe the server's /v1/models endpoint and fill in model / context size.
+    // When `force` is true, values are shown even if unchanged; otherwise only a
+    // concise status line is added. Never blocks the UI for more than a few
+    // seconds (curl timeouts in the library).
+    void detect_server(bool force) {
+        agent::ServerInfo info = agent::apply_server_autodetect(cfg_);
+        if (!info.ok) {
+            if (force)
+                append_line(P_STATUS, "detect: server unreachable at " +
+                                          cfg_.api_base);
+            return;
+        }
+        last_detected_ = info;
+        std::string note = "detected model=" + cfg_.model +
+                           " n_ctx=" + std::to_string(cfg_.context_size);
+        if (info.context_train > 0 &&
+            info.context_train != cfg_.context_size)
+            note += " (max " + std::to_string(info.context_train) + ")";
+        append_line(P_STATUS, note);
+        draw();
+    }
+
+    // Server settings using a native libform dialog. The detected server info
+    // (if any) is shown so the user knows what auto-detection found.
     void settings_screen() {
+        std::string det = last_detected_.ok
+            ? ("detected: " + last_detected_.model + " / n_ctx " +
+               std::to_string(last_detected_.context_size))
+            : std::string("detected: (none - press Detect below)");
+
+        std::vector<std::string> pre = {"Edit settings",
+                                        "Detect from server now"};
+        int pick = menu_select(det, pre);
+        if (pick == 1) { detect_server(true); return; }
+        if (pick != 0) return;
+
         std::vector<FieldSpec> fields = {
             {"Server URL", cfg_.api_base, false},
             {"Token", cfg_.api_key, true},
-            {"Model", cfg_.model, false},
-            {"Context (n_ctx)", std::to_string(cfg_.context_size), false},
+            {"Model (blank = auto)", cfg_.model, false},
+            {"Context n_ctx (0 = auto)", std::to_string(cfg_.context_size), false},
         };
         if (!form_edit("Server settings", fields)) return;
 
         cfg_.api_base = fields[0].value;
         cfg_.api_key = fields[1].value;
-        cfg_.model = fields[2].value;
+        // Blank model / zero context mean "let auto-detect decide": clear the
+        // explicit flag so the next probe fills them.
+        if (fields[2].value.empty()) {
+            cfg_.model_explicit = false;
+        } else {
+            cfg_.model = fields[2].value;
+            cfg_.model_explicit = true;
+        }
         try {
             int n = std::stoi(fields[3].value);
-            if (n > 0) cfg_.context_size = n;
+            if (n > 0) { cfg_.context_size = n; cfg_.context_explicit = true; }
+            else       { cfg_.context_explicit = false; }
         } catch (...) {}
+
+        // Re-probe to fill anything the user left on auto.
+        if (!cfg_.model_explicit || !cfg_.context_explicit)
+            detect_server(false);
 
         std::vector<std::string> post = {"Save to " + settings_path_,
                                          "Apply only (don't save)"};
@@ -692,6 +740,7 @@ private:
     agent::RunState state_ = agent::RunState::Idle;  // live activity
     agent::Stats stats_;            // last-request telemetry (latency/tps/tokens)
     long ctx_used_ = -1;            // prompt_tokens of the last request
+    agent::ServerInfo last_detected_;  // most recent /v1/models probe result
 };
 
 } // namespace
@@ -704,7 +753,7 @@ int main(int argc, char** argv) {
         if (a == "--config" && i + 1 < argc) config_file = argv[++i];
         else if (a == "--api-base" && i + 1 < argc) cfg.api_base = argv[++i];
         else if (a == "--api-key" && i + 1 < argc) cfg.api_key = argv[++i];
-        else if (a == "--model" && i + 1 < argc) cfg.model = argv[++i];
+        else if (a == "--model" && i + 1 < argc) { cfg.model = argv[++i]; cfg.model_explicit = true; }
         else if (a == "--system" && i + 1 < argc) cfg.system_prompt_path = argv[++i];
         else if (a == "--tools" && i + 1 < argc) cfg.tools_prompt_path = argv[++i];
         else if (a == "--no-stream") cfg.stream = false;

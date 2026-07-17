@@ -32,7 +32,7 @@ int main(int argc, char** argv) {
         };
         if (a == "--api-base")        cfg.api_base = next("");
         else if (a == "--api-key")    cfg.api_key = next("");
-        else if (a == "--model")      cfg.model = next("");
+        else if (a == "--model")      { cfg.model = next(""); cfg.model_explicit = true; }
         else if (a == "--system")     cfg.system_prompt_path = next("");
         else if (a == "--tools")      cfg.tools_prompt_path = next("");
         else if (a == "--config")     config_file = next("");
@@ -44,6 +44,15 @@ int main(int argc, char** argv) {
 
     if (!config_file.empty()) cfg.load(config_file);
     cfg.apply_environment();
+
+    // Auto-detect model / context window from the server, filling only values
+    // the user did not set explicitly.
+    {
+        agent::ServerInfo info = agent::apply_server_autodetect(cfg);
+        if (info.ok)
+            std::cerr << "[server] model=" << cfg.model
+                      << " n_ctx=" << cfg.context_size << "\n";
+    }
 
     if (prompt.empty()) {
         std::getline(std::cin, prompt);
