@@ -186,31 +186,34 @@ void Tui::session_browser() {
         if (sel < scroll_off) scroll_off = sel;
         if (sel >= scroll_off + list_h) scroll_off = sel - list_h + 1;
 
-        // Clear content area
-        for (int r = 0; r < ah; ++r)
-            mvwaddstr(w, 1 + r, 1, std::string(aw, ' ').c_str());
-
-        // Render list
+        // Render list — clear each row with its own attribute so highlights
+        // extend full-width. The date header rows and blank rows use the
+        // dialog background pair inherited from wbkgd.
         int title_w = std::max(16, aw - 34);
-        for (int i = 0; i < list_h && scroll_off + i < nd; ++i) {
+        for (int i = 0; i < list_h; ++i) {
             int row = 1 + i;
-            auto& [typ, idx] = disp[scroll_off + i];
+            int disp_idx = scroll_off + i;
+            bool has_item = (disp_idx < nd);
+            if (!has_item) continue;  // past end — wbkgd shows through
+
+            auto& [typ, idx] = disp[disp_idx];
             if (typ == 0) {
                 // Date header
                 wattron(w, COLOR_PAIR(P_BAR_DIM) | A_BOLD);
                 mvwaddstr(w, row, 1, ("  " + date_label(all[idx].updated_ms)).c_str());
                 wattroff(w, COLOR_PAIR(P_BAR_DIM) | A_BOLD);
             } else {
-                bool cur = (scroll_off + i == sel);
-                int x = 1;
+                bool cur = (disp_idx == sel);
                 if (cur) {
+                    // Full-width highlight bar
                     wattron(w, COLOR_PAIR(P_BUTTON_ACT) | A_BOLD);
-                    mvwaddstr(w, row, x, "> ");
+                    mvwaddstr(w, row, 1, std::string(aw, ' ').c_str());
+                    mvwaddstr(w, row, 1, "> ");
                 } else {
                     wattron(w, COLOR_PAIR(P_ASSISTANT));
-                    mvwaddstr(w, row, x, "  ");
+                    mvwaddstr(w, row, 1, "  ");
                 }
-                x += 2;
+                int x = 3;
                 auto& m = all[idx];
                 std::string title = m.title;
                 if (static_cast<int>(title.size()) > title_w)
