@@ -1,0 +1,97 @@
+name: Release
+
+# Tag-based CD: pushing a semver tag (e.g. v0.1.0) builds release artifacts and
+# publishes a GitHub Release. A tag containing a hyphen (e.g. v0.1.0-rc.1) is
+# published as a pre-release. Building on a tag keeps releases deliberate and
+# traceable rather than firing on every merge to main.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          if [[ "${tag}" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libcurl4-openssl-dev libncursesw5-dev \
+            pkg-config ruby ruby-dev
+          sudo gem install --no-document fpm
+
+      - name: Configure
+        run: ./configure --prefix=/usr
+
+      - name: Build
+        run: make
+
+      - name: Test
+        run: make test
+
+      - name: Stage install tree
+        run: |
+          rm -rf stage
+          make install DESTDIR="$PWD/stage"
+
+      - name: Build tarball + checksum
+        id: tar
+        run: |
+          version="${{ steps.ver.outputs.version }}"
+          name="cpp-agent-${version}-linux-x86_64"
+          mkdir -p dist
+          tar -C stage -czf "dist/${name}.tar.gz" .
+          ( cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256" )
+          echo "tarball=dist/${name}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Build .deb (fpm)
+        id: deb
+        run: |
+          version="${{ steps.ver.outputs.version }}"
+          fpm -s dir -t deb \
+            -n cpp-agent \
+            -v "${version}" \
+            --license "Apache-2.0" \
+            --maintainer "Jacek Trefon <hello@trefon.com>" \
+            --url "https://github.com/jtrefon/ai-agent-tui" \
+            --description "C++ AI agent harness with a headless CLI and ncurses TUI." \
+            --depends "libcurl4" \
+            --depends "libncursesw6" \
+            --deb-no-default-config-files \
+            -C stage \
+            -p "dist/cpp-agent_${version}_amd64.deb" \
+            usr
+          ( cd dist && sha256sum "cpp-agent_${version}_amd64.deb" > "cpp-agent_${version}_amd64.deb.sha256" )
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
+          generate_release_notes: true
+          prerelease: ${{ steps.ver.outputs.prerelease }}
+          files: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+            dist/*.deb
+            dist/*.deb.sha256

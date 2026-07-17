@@ -17,6 +17,10 @@ cpp-agent-tui
 run_tests
 smoketest
 
+# Release packaging output
+stage/
+dist/
+
 # Local runtime config, telemetry, and debug logs
 cpp-agent.conf
 logs/

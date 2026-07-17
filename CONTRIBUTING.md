@@ -61,6 +61,27 @@ CI runs the same steps on `g++` and `clang++`.
 4. Ensure `make && make test` pass locally.
 5. Open a pull request describing the change and how you verified it.
 
+## Releasing (maintainers)
+
+Releases are tag-driven. CI (`.github/workflows/release.yml`) runs when a semver
+tag is pushed:
+
+```sh
+git tag v0.1.0          # or v0.1.0-rc.1 for a pre-release
+git push origin v0.1.0
+```
+
+The workflow builds and tests, stages `make install`, then publishes a GitHub
+Release with:
+
+- `cpp-agent-<version>-linux-x86_64.tar.gz` (+ `.sha256`)
+- `cpp-agent_<version>_amd64.deb` (+ `.sha256`)
+- auto-generated release notes
+
+Tags containing a hyphen (e.g. `v0.1.0-rc.1`) are marked as pre-releases.
+Follow [semantic versioning](https://semver.org/): patch for fixes, minor for
+backward-compatible features, major for breaking changes.
+
 ## Reporting bugs and requesting features
 
 Use the GitHub issue templates. For security issues, please see the security

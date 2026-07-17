@@ -12,6 +12,7 @@ prefix="/usr/local"
 bindir=""
 libdir=""
 includedir=""
+datarootdir=""
 with_curl_cflags=""
 with_curl_libs=""
 
@@ -24,6 +25,7 @@ Options:
   --bindir=DIR        user executables (default: PREFIX/bin)
   --libdir=DIR        object code libraries (default: PREFIX/lib)
   --includedir=DIR    C header files (default: PREFIX/include)
+  --datarootdir=DIR   read-only arch-independent data (default: PREFIX/share)
   --help              show this help
 
 The script auto-detects the C++ compiler, libcurl, and pkg-config.
@@ -36,6 +38,7 @@ for arg in "$@"; do
         --bindir=*)   bindir="${arg#*=}" ;;
         --libdir=*)   libdir="${arg#*=}" ;;
         --includedir=*) includedir="${arg#*=}" ;;
+        --datarootdir=*) datarootdir="${arg#*=}" ;;
         --help|-h)    usage; exit 0 ;;
         *) echo "configure: unknown option: $arg" >&2; usage >&2; exit 1 ;;
     esac
@@ -44,6 +47,7 @@ done
 [ -z "$bindir" ]     && bindir="$prefix/bin"
 [ -z "$libdir" ]     && libdir="$prefix/lib"
 [ -z "$includedir" ] && includedir="$prefix/include"
+[ -z "$datarootdir" ] && datarootdir="$prefix/share"
 
 echo "checking for C++ compiler..."
 if command -v g++ >/dev/null 2>&1; then
@@ -125,6 +129,7 @@ sed -e "s|@srcdir@|$srcdir|g" \
     -e "s|@bindir@|$bindir|g" \
     -e "s|@libdir@|$libdir|g" \
     -e "s|@includedir@|$includedir|g" \
+    -e "s|@datarootdir@|$datarootdir|g" \
     -e "s|@CXX@|$CXX|g" \
     -e "s|@CXXFLAGS@|$CXXFLAGS|g" \
     -e "s|@CPPFLAGS@|$CPPFLAGS $PROJECT_CPPFLAGS|g" \
