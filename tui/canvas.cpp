@@ -4,6 +4,7 @@
 #include "canvas.h"
 
 #include <algorithm>
+#include <cwchar>
 
 #include "textutil.h"
 
@@ -67,22 +68,33 @@ void Canvas::render() {
         }
         int x = 0;
         for (const auto& r : l.runs) {
-            int cw = text::display_cols(r.text);
             if (x >= cols_) break;                 // nothing left on this row
             int room = cols_ - x;
-            int n = std::min(static_cast<int>(r.text.size()), room);
-            if (n <= 0) continue;
+            if (room <= 0) break;
             int attr = (r.bold ? A_BOLD : 0) | (r.dim ? A_DIM : 0) |
                        (r.italic ? A_ITALIC : 0) | (r.under ? A_UNDERLINE : 0);
             wattron(win_, COLOR_PAIR(r.pair) | attr);
             std::wstring ws = text::to_wide(r.text);
-            // Clamp the write to the window width: mvwaddnwstr does not clip
+            // Clamp the write to the window width. mvwaddnwstr does not clip
             // and would otherwise scribble past the row buffer (heap corrup-
-            // tion / crash) when a run's width plus x exceeds cols_.
-            mvwaddnwstr(win_, row, x, ws.c_str(),
-                        std::min(static_cast<int>(ws.size()), room));
-            x += cw;
+            // tion / crash). The clamp must be by DISPLAY COLUMNS, not wide-
+            // char count, because a run may contain double-width glyphs (emoji,
+            // CJK) that occupy two columns each.
+            int budget = room;
+            int n = 0;
+            for (wchar_t wc : ws) {
+                int w = wcwidth(wc);
+                if (w < 0) w = 1;
+                if (w > budget) break;
+                budget -= w;
+                ++n;
+            }
+            if (n > 0)
+                mvwaddnwstr(win_, row, x, ws.c_str(), n);
             wattroff(win_, COLOR_PAIR(r.pair) | attr);
+            // Advance x by the true drawn width (double-width glyphs consume
+            // two columns), not by display_cols() which counts each char as 1.
+            x += (room - budget);
         }
     }
     wnoutrefresh(win_);
