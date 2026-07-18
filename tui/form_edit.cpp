@@ -11,6 +11,7 @@
 namespace tui {
 
 bool form_edit(const std::string& title, std::vector<FieldSpec>& fields) {
+    ModalScope scope;
     const int n = static_cast<int>(fields.size());
     const int field_w = 44;
     const int label_w = 16;

@@ -317,6 +317,18 @@ void Tui::close_window() {
 }
 
 void Tui::request_quit() { quit_ = true; }
-void Tui::redraw_after_modal() { touchwin(stdscr); draw(); draw_input(""); }
+void Tui::redraw_after_modal() {
+    modal_open_ = false;
+    // Resolve any approvals that arrived while a modal dialog was open. Each
+    // resolve shows its own (non-nested) approval dialog on the now-live loop.
+    while (!pending_approvals_.empty()) {
+        AgentEvent ev = std::move(pending_approvals_.front());
+        pending_approvals_.pop();
+        resolve_approval(ev);
+    }
+    touchwin(stdscr);
+    draw();
+    draw_input("");
+}
 
 } // namespace tui

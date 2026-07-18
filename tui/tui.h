@@ -76,6 +76,8 @@ public:
 private:
     // ---- thread / event machinery ---------------------------------------
     bool drain_events();       // pop and process all pending events
+    void pump_events();        // drain + redraw; safe to call from a modal loop
+    void resolve_approval(const AgentEvent& ev);
     void send_async(const std::string& prompt);
     void agent_worker(const std::string& prompt);
 
@@ -84,6 +86,14 @@ private:
     std::thread agent_thread_;
     std::atomic<bool> agent_busy_{false};
     std::atomic<bool> agent_cancel_{false};
+
+    // A modal dialog (info_dialog / menu_select / config / session browser)
+    // blocks the main thread in wgetch, so drain_events() cannot run. If the
+    // agent needs an approval while a modal is open we queue it and resolve it
+    // once the modal closes, instead of nesting ncurses dialogs or deadlocking
+    // the worker on its promise.
+    bool modal_open_ = false;
+    std::queue<AgentEvent> pending_approvals_;
 
     // ---- geometry / layout ----------------------------------------------
     int height() const;

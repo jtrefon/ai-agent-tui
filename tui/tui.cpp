@@ -25,6 +25,7 @@ Tui::Tui(agent::Config cfg, agent::ToolRegistry& reg)
     set_escdelay(25);
     curs_set(1);
     start_color();
+    set_modal_flag(&modal_open_);
     use_default_colors();
     use_legacy_coding(1);
     init_pairs();
@@ -183,23 +184,48 @@ bool Tui::drain_events() {
             win().dirty = true;
             break;
         case AgentEvent::Approval: {
-            int pick = menu_select("Approve action?  " + ev.text,
-                                   {"Deny", "Allow once", "Allow for this session"});
-            agent::Approval d = agent::Approval::Deny;
-            if (pick == 1) d = agent::Approval::AllowOnce;
-            else if (pick == 2) d = agent::Approval::AllowSession;
-            append_line(P_STATUS,
-                        std::string("approval: ") +
-                        (d == agent::Approval::Deny ? "denied" :
-                         d == agent::Approval::AllowOnce ? "allowed once" :
-                         "allowed for session") + "  (" + ev.text + ")");
-            if (ev.approval_promise)
-                ev.approval_promise->set_value(d);
-            break;
+            // While a modal dialog is open the main thread is not in the event
+            // loop; queue the approval so we don't nest ncurses dialogs or
+            // deadlock the worker on its promise. Resolved in
+            // redraw_after_modal() once the modal closes.
+            if (modal_open_) {
+                pending_approvals_.push(std::move(ev));
+                break;
             }
+            resolve_approval(ev);
+            break;
+        }
         }
     }
+
+    // Resolve any approvals queued while a modal was open. Only one per pump so
+    // a nested approval (during the approval dialog) queues and resolves on a
+    // later tick rather than re-entering this loop.
+    if (!modal_open_ && !pending_approvals_.empty()) {
+        AgentEvent ev = std::move(pending_approvals_.front());
+        pending_approvals_.pop();
+        resolve_approval(ev);
+    }
     return true;
+}
+
+void Tui::resolve_approval(const AgentEvent& ev) {
+    int pick = menu_select("Approve action?  " + ev.text,
+                            {"Deny", "Allow once", "Allow for this session"});
+    agent::Approval d = agent::Approval::Deny;
+    if (pick == 1) d = agent::Approval::AllowOnce;
+    else if (pick == 2) d = agent::Approval::AllowSession;
+    append_line(P_STATUS,
+                std::string("approval: ") +
+                (d == agent::Approval::Deny ? "denied" :
+                 d == agent::Approval::AllowOnce ? "allowed once" :
+                 "allowed for session") + "  (" + ev.text + ")");
+    if (ev.approval_promise)
+        ev.approval_promise->set_value(d);
+}
+
+void Tui::pump_events() {
+    if (drain_events()) draw();
 }
 
 void Tui::send_async(const std::string& prompt) {

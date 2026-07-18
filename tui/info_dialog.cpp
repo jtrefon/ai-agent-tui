@@ -10,6 +10,7 @@
 namespace tui {
 
 void info_dialog(const std::string& title, const std::vector<std::string>& rows) {
+    ModalScope scope;
     curs_set(0);   // hide the input-line cursor while a modal is up
     int sh, sw;
     getmaxyx(stdscr, sh, sw);

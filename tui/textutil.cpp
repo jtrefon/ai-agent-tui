@@ -11,16 +11,15 @@ namespace text {
 
 namespace {
 bool detect_utf8() {
-    const char* cs = nl_langinfo(CODESET);
-    if (!cs || (std::strcmp(cs, "UTF-8") != 0 && std::strcmp(cs, "utf8") != 0))
-        return false;                       // non-UTF-8 locale: bytes would
-                                            // render as garbage.
-    // PuTTY advertises itself via TERM=putty* but commonly runs with a Latin-1
-    // translation table, so even over a UTF-8 locale the multibyte glyphs show
-    // up as raw bytes. Fall back to ASCII for any PuTTY terminal.
-    const char* term = std::getenv("TERM");
-    if (term && std::strncmp(term, "putty", 5) == 0) return false;
-    return true;
+    // Default to ASCII. Many remote sessions (PuTTY with a Latin-1 translation
+    // table, or a non-UTF-8 locale) render raw UTF-8 bytes as garbage, and the
+    // terminal's actual capability cannot be detected reliably in-band. ASCII
+    // decoration works everywhere. Opt into Unicode glyphs with AMBER_UNICODE=1
+    // on a terminal that is known to handle UTF-8.
+    const char* ov = std::getenv("AMBER_UNICODE");
+    if (!ov) return false;
+    return ov[0] == '1' || ov[0] == 'y' || ov[0] == 'Y' || ov[0] == 't' ||
+           ov[0] == 'T';
 }
 } // namespace
 

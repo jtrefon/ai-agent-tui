@@ -248,16 +248,16 @@ std::string Tui::usage(const Command& c) const {
 }
 
 void Tui::show_command_frame(const Command& c) {
-    std::vector<std::string> rows;
-    rows.push_back("");
-    rows.push_back("  " + c.help);
-    rows.push_back("");
+    // Render the help non-blocking as scrollback lines (never a modal dialog),
+    // so opening it can never stall the agent worker thread or the event pump.
+    banner("/" + c.name);
+    append_line(P_STATUS, "  " + c.help);
+    append_line(P_STATUS, "");
     if (c.current_value) {
         std::string cur = c.current_value();
         if (!cur.empty()) {
-            std::string line = "  current: " + cur;
-            rows.push_back(line);
-            rows.push_back("");
+            append_line(P_STATUS, "  current: " + cur);
+            append_line(P_STATUS, "");
         }
     }
     if (c.complete_arg) {
@@ -265,13 +265,12 @@ void Tui::show_command_frame(const Command& c) {
         if (!opts.empty()) {
             std::string line = "  options:";
             for (auto& o : opts) line += "  " + o;
-            rows.push_back(line);
-            rows.push_back("");
-            rows.push_back("  usage:  /" + c.name + " " + c.args);
+            append_line(P_STATUS, line);
+            append_line(P_STATUS, "");
+            append_line(P_STATUS, "  usage:  /" + c.name + " " + c.args);
         }
     }
-    info_dialog("/" + c.name, rows);
-    redraw_after_modal();
+    draw();
 }
 
 void Tui::cmd_help(const std::string& arg) {

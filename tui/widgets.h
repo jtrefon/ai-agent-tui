@@ -44,6 +44,21 @@ enum Pair {
 // use_default_colors()) to have been called first.
 void init_pairs();
 
+// Register the owner's "a modal dialog is open" flag. The modal primitives
+// (info_dialog, menu_select, form_edit) set/clear it so the host event loop can
+// defer agent approvals instead of nesting dialogs or deadlocking the worker.
+// Pass nullptr to detach.
+void set_modal_flag(bool* flag);
+
+// RAII guard: marks the modal flag set on construction, cleared on destruction,
+// so a modal primitive always releases it even on early return.
+struct ModalScope {
+    ModalScope();
+    ~ModalScope();
+    ModalScope(const ModalScope&) = delete;
+    ModalScope& operator=(const ModalScope&) = delete;
+};
+
 // Dialog: a centered bordered window managed by a panel, with a drop-shadow
 // panel underneath. RAII: constructing shows it, destroying hides/frees it.
 class Dialog {
