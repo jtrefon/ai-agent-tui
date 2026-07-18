@@ -109,11 +109,6 @@ void flush_block(Ctx& c) {
 
     if (c.heading_level > 0) {
         Line h;
-        Run mark;
-        mark.pair = c.st->heading_pair;
-        mark.bold = true;
-        mark.text = std::string(c.heading_level, '#') + " ";
-        h.runs.push_back(mark);
         for (auto& r : l.runs) {
             r.pair = c.st->heading_pair;
             r.bold = true;

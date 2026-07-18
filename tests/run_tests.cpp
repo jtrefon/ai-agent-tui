@@ -207,7 +207,7 @@ TEST(markdown_trims_heading_whitespace) {
     ASSERT_FALSE(ls.empty());
     std::string h;
     for (auto& r : ls[0].runs) h += r.text;
-    ASSERT_EQ(h, "## Spaced heading");
+    ASSERT_EQ(h, "Spaced heading");
 }
 
 TEST(markdown_bare_hash_markers_do_not_crash) {
@@ -225,9 +225,9 @@ TEST(markdown_bare_hash_markers_do_not_crash) {
     for (auto& r : ls[0].runs) h0 += r.text;
     for (auto& r : ls[1].runs) h1 += r.text;
     for (auto& r : ls[2].runs) h2 += r.text;
-    ASSERT_EQ(h0, "# Title");
-    ASSERT_EQ(h1, "## Sub");
-    ASSERT_EQ(h2, "### Deep");
+    ASSERT_EQ(h0, "Title");
+    ASSERT_EQ(h1, "Sub");
+    ASSERT_EQ(h2, "Deep");
 }
 
 TEST(markdown_ordered_list_numbers_sequentially) {
