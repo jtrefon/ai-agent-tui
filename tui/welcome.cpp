@@ -26,22 +26,19 @@ const int kArtCols = 120;
 // clang-format on
 
 // ---- ncurses grayscale setup ----------------------------------------------
-// Create 25 colour pairs for the art: one for black (color 0) and 24 for the
-// xterm grayscale ramp (colours 232-255). Call once per process.
+// Use the standard xterm-256color grayscale ramp (colours 232-255), which is
+// already grayscale on every 256-colour terminal. We deliberately do NOT call
+// init_color(): redefining palette entries emits OSC 4 escape sequences that
+// terminals such as PuTTY render literally as garbage. Registering the ramp
+// colours directly gives identical visuals everywhere without that side-effect.
 void init_gray_pairs() {
     static bool done = false;
     if (done) return;
     done = true;
 
     init_pair(P_GRAY, 0, 0);
-
-    for (int i = 0; i < 24; ++i) {
-        int cidx = 232 + i;
-        int v = (i * 1000 + 11) / 23;
-        if (v > 1000) v = 1000;
-        init_color(cidx, v, v, v);
-        init_pair(P_GRAY + 1 + i, cidx, cidx);
-    }
+    for (int i = 0; i < 24; ++i)
+        init_pair(P_GRAY + 1 + i, 232 + i, 232 + i);
 }
 
 int color_to_pair(int cidx) {

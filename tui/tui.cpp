@@ -108,20 +108,22 @@ bool Tui::drain_events() {
         case AgentEvent::Status:
             append_line(P_STATUS, ev.text);
             break;
-        case AgentEvent::ToolCall:
+        case AgentEvent::ToolCall: {
             flush_stream();
-            if (win().tool_fold != ToolFold::Never) {
+            ToolFold fold = tool_fold_;
+            if (fold != ToolFold::Never) {
                 std::string args = ev.tool_args.dump();
                 if (args.size() > 60) args = args.substr(0, 57) + "...";
-                if (win().tool_fold == ToolFold::Auto) {
+                if (fold == ToolFold::Auto)
                     append_line(P_STATUS, "\u2728 " + ev.tool_name + " " + args);
-                } else {
+                else
                     append_line(P_STATUS, "tool: " + ev.tool_name + " " + args);
-                }
             }
             break;
+        }
         case AgentEvent::ToolResult: {
-            if (win().tool_fold == ToolFold::Never) break;
+            ToolFold fold = tool_fold_;
+            if (fold == ToolFold::Never) break;
             // Build a compact summary line.
             auto summarize = [](const std::string& name,
                                 const agent::ToolResult& r) -> std::string {
@@ -137,7 +139,7 @@ bool Tui::drain_events() {
                        std::to_string(lines) + " lines)  " + preview;
             };
             std::string line = summarize(ev.tool_name, ev.tool_result);
-            if (win().tool_fold == ToolFold::Auto) {
+            if (fold == ToolFold::Auto) {
                 // Replace the last "running" tool line with the summary.
                 auto& lines = win().lines;
                 bool replaced = false;
@@ -379,11 +381,34 @@ void Tui::run() {
             }
             continue;
         }
-        if (ch == '\t' && drawer_open_) {
-            input = drawer_complete(input);
-            drawer_sel_ = 0;
-            draw(); draw_input(input);
-            continue;
+        if (ch == '\t') {
+            // Argument context (/cmd partial): complete against the command's
+            // own candidate list (zsh-style). A second Tab on an ambiguous
+            // prefix pops up a selection list.
+            if (input.find(' ') != std::string::npos) {
+                std::vector<std::string> choices;
+                std::string rewritten =
+                    palette::complete_arg(commands(), input, choices);
+                if (!choices.empty()) {
+                    int sel = menu_select("complete: " + input, choices);
+                    if (sel >= 0 && sel < static_cast<int>(choices.size())) {
+                        size_t sp = input.find(' ');
+                        input = input.substr(0, sp + 1) + choices[sel] + " ";
+                    }
+                } else if (rewritten != input) {
+                    input = rewritten;
+                }
+                if (drawer_open_) { drawer_open_ = false; draw(); }
+                draw_input(input);
+                continue;
+            }
+            // Command-name completion via the drawer.
+            if (drawer_open_) {
+                input = drawer_complete(input);
+                drawer_sel_ = 0;
+                draw(); draw_input(input);
+                continue;
+            }
         }
         if (drawer_open_ && (ch == KEY_UP || ch == KEY_DOWN)) {
             int n = static_cast<int>(filter_commands(drawer_token(input)).size());

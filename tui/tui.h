@@ -152,9 +152,11 @@ private:
     // ---- slash command framework ----------------------------------------
     const std::vector<tui::Command>& commands();
     void build_commands();
+    ToolFold tool_fold_ = ToolFold::Auto;  // global tool-call display mode
     const tui::Command* find_command(const std::string& name);
     bool handle_slash(const std::string& line);
     std::string usage(const tui::Command& c) const;
+    void show_command_frame(const tui::Command& c);
     void cmd_help(const std::string& arg);
     void cmd_window(const std::string& arg);
     void request_quit();

@@ -142,7 +142,7 @@ void Tui::cmd_toolfold(const std::string& arg) {
         append_line(P_STATUS, "usage: /toolfold always|auto|never");
         return;
     }
-    win().tool_fold = f;
+    tool_fold_ = f;
     append_line(P_STATUS, std::string("tool fold set to ") + arg);
     draw();
 }
@@ -168,10 +168,32 @@ void Tui::build_commands() {
          [this](const std::string&) { toggle_thinking(); }},
         {"toolfold", {}, "always|auto|never",
          "how to show tool calls in scrollback",
-         [this](const std::string& a) { cmd_toolfold(a); }},
+         [this](const std::string& a) { cmd_toolfold(a); },
+         [](const std::string&) {
+             return std::vector<std::string>{"always", "auto", "never"};
+         },
+         [this]() -> std::string {
+             switch (tool_fold_) {
+                 case ToolFold::Always: return "always";
+                 case ToolFold::Auto:   return "auto";
+                 case ToolFold::Never:  return "never";
+             }
+             return "auto";
+         }},
         {"policy", {"mode"}, "read|write|yolo",
          "set agent policy: read (safe), write (normal), yolo (trusted)",
-         [this](const std::string& a) { cmd_policy(a); }},
+         [this](const std::string& a) { cmd_policy(a); },
+         [](const std::string&) {
+             return std::vector<std::string>{"read", "write", "yolo"};
+         },
+         [this]() -> std::string {
+             switch (cfg_.mode) {
+                 case agent::AgentMode::Read:  return "read";
+                 case agent::AgentMode::Write: return "write";
+                 case agent::AgentMode::Yolo:  return "yolo";
+             }
+             return "write";
+         }},
         {"new", {}, "",
          "open a new chat window",
          [this](const std::string&) { new_window("chat"); draw(); }},
@@ -211,12 +233,45 @@ bool Tui::handle_slash(const std::string& line) {
                     "unknown command: /" + name + "  (try /help)");
         return true;
     }
+    // Invoked with no argument but the command expects a fixed option: show a
+    // BitchX-style help frame with description, current value and options.
+    if (arg.empty() && c->complete_arg && !c->args.empty()) {
+        show_command_frame(*c);
+        return true;
+    }
     c->run(arg);
     return true;
 }
 
 std::string Tui::usage(const Command& c) const {
     return palette::usage(c);
+}
+
+void Tui::show_command_frame(const Command& c) {
+    std::vector<std::string> rows;
+    rows.push_back("");
+    rows.push_back("  " + c.help);
+    rows.push_back("");
+    if (c.current_value) {
+        std::string cur = c.current_value();
+        if (!cur.empty()) {
+            std::string line = "  current: " + cur;
+            rows.push_back(line);
+            rows.push_back("");
+        }
+    }
+    if (c.complete_arg) {
+        auto opts = c.complete_arg("");
+        if (!opts.empty()) {
+            std::string line = "  options:";
+            for (auto& o : opts) line += "  " + o;
+            rows.push_back(line);
+            rows.push_back("");
+            rows.push_back("  usage:  /" + c.name + " " + c.args);
+        }
+    }
+    info_dialog("/" + c.name, rows);
+    redraw_after_modal();
 }
 
 void Tui::cmd_help(const std::string& arg) {

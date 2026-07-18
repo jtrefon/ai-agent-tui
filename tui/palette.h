@@ -17,6 +17,13 @@ struct Command {
     std::string args;                 // usage hint, e.g. "new|close <name>"
     std::string help;                 // one-line description
     std::function<void(const std::string& arg)> run;
+    // Argument tab-completion: given the partially-typed argument, return the
+    // list of valid completions (e.g. {"always","auto","never"}). The command
+    // itself owns its option list. Return empty for free-form / no completion.
+    std::function<std::vector<std::string>(const std::string&)> complete_arg;
+    // Current value of the command's setting, for the no-argument help frame.
+    // Return empty if the command takes no persistent setting.
+    std::function<std::string()> current_value;
 };
 
 // The command-name token currently typed: text after '/' up to the first
@@ -51,5 +58,13 @@ std::string usage(const Command& c);
 // rewritten) input line.
 std::string complete(const std::vector<Command>& commands,
                      const std::string& input, int sel);
+
+// Tab pressed after the command name + space: complete the argument against
+// the command's own candidate list. Returns the (possibly rewritten) input
+// line; if the result is ambiguous, `out_choices` is filled so the caller can
+// show a zsh-style selection popup.
+std::string complete_arg(const std::vector<Command>& commands,
+                         const std::string& input,
+                         std::vector<std::string>& out_choices);
 
 }  // namespace tui::palette
