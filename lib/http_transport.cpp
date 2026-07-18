@@ -19,6 +19,17 @@ size_t stream_write_cb(void* ptr, size_t size, size_t nmemb, void* user) {
         static_cast<char*>(ptr), size, nmemb);
 }
 
+long read_usage_token(const json& usage, const char* key) {
+    auto it = usage.find(key);
+    return (it != usage.end() && it->is_number()) ? it->get<long>() : -1;
+}
+
+void apply_tps(Stats& stats, double ttfb, double total) {
+    double gen = total - ttfb;
+    if (stats.completion_tokens > 0 && gen > 0.0)
+        stats.tps = stats.completion_tokens / gen;
+}
+
 } // namespace
 
 HeaderList::~HeaderList() {
@@ -48,6 +59,20 @@ Message message_from_completion(const std::string& response) {
     if (msg.contains("tool_calls") && !msg["tool_calls"].is_null())
         out.tool_calls = msg["tool_calls"];
     return out;
+}
+
+// Fill `stats` from a buffered response body and its transfer timings.
+void fill_buffered_stats(Stats& stats, const std::string& response, double ttfb,
+                         double total) {
+    stats.valid = true;
+    stats.latency_ms = ttfb * 1000.0;
+    json resp = json::parse(response, nullptr, false);
+    if (resp.contains("usage") && resp["usage"].is_object()) {
+        const json& u = resp["usage"];
+        stats.prompt_tokens = read_usage_token(u, "prompt_tokens");
+        stats.completion_tokens = read_usage_token(u, "completion_tokens");
+    }
+    apply_tps(stats, ttfb, total);
 }
 
 // POST `payload` to the chat endpoint and return the raw response body, setting
@@ -129,9 +154,7 @@ void stream_completion(const Config& cfg, const std::string& payload,
         stats->latency_ms = ttfb * 1000.0;
         stats->prompt_tokens = parser.prompt_tokens();
         stats->completion_tokens = parser.completion_tokens();
-        double gen = total - ttfb;
-        if (stats->completion_tokens > 0 && gen > 0.0)
-            stats->tps = stats->completion_tokens / gen;
+        apply_tps(*stats, ttfb, total);
     }
 }
 

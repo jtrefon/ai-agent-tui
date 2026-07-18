@@ -41,22 +41,7 @@ Message LLMClient::chat(const std::vector<Message>& messages,
     debug_log(cfg_.debug_log, "response", response);
 
     Message out = message_from_completion(response);
-    if (stats) {
-        stats->valid = true;
-        stats->latency_ms = ttfb * 1000.0;
-        json resp = json::parse(response, nullptr, false);
-        if (resp.contains("usage") && resp["usage"].is_object()) {
-            const json& u = resp["usage"];
-            if (u.contains("prompt_tokens") && u["prompt_tokens"].is_number())
-                stats->prompt_tokens = u["prompt_tokens"].get<long>();
-            if (u.contains("completion_tokens") &&
-                u["completion_tokens"].is_number())
-                stats->completion_tokens = u["completion_tokens"].get<long>();
-        }
-        double gen = total - ttfb;
-        if (stats->completion_tokens > 0 && gen > 0.0)
-            stats->tps = stats->completion_tokens / gen;
-    }
+    if (stats) fill_buffered_stats(*stats, response, ttfb, total);
     return out;
 }
 

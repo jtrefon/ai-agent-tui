@@ -38,6 +38,11 @@ void stream_completion(const Config& cfg, const std::string& payload,
 // malformed or error response.
 Message message_from_completion(const std::string& response);
 
+// Fill `stats` from a buffered response body and its transfer timings (seconds).
+// Mirrors the telemetry that stream_completion() produces for the streamed path.
+void fill_buffered_stats(Stats& stats, const std::string& response, double ttfb,
+                         double total);
+
 } // namespace agent
 
 #endif // AGENT_HTTP_TRANSPORT_H
