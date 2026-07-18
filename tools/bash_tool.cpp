@@ -5,6 +5,7 @@
 #include "agent/tools.h"
 #include "agent/workspace.h"
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <csignal>
@@ -63,6 +64,91 @@ bool run_with_timeout(int fd, pid_t pid, int timeout_s, std::string& out,
     }
     return false;
 }
+
+// Extract and validate the command; clamp timeout to [1, kMaxTimeout]. Returns
+// false (with r.error set) when no command was supplied.
+bool parse_bash_args(const json& a, std::string& command, int& timeout,
+                     ToolResult& r) {
+    if (!a.contains("command") || !a["command"].is_string() ||
+        a["command"].get<std::string>().empty()) {
+        r.ok = false;
+        r.error = "missing 'command'";
+        return false;
+    }
+    command = a["command"].get<std::string>();
+    timeout = static_cast<int>(a.value("timeout", 60));
+    timeout = std::max(1, std::min(timeout, kMaxTimeout));
+    return true;
+}
+
+// Child side of the fork: new process group, stdout+stderr to the pipe, chdir
+// into the workspace, then exec the shell. Never returns.
+[[noreturn]] void run_child(int write_fd, const std::string& cwd,
+                            const std::string& command) {
+    setpgid(0, 0);
+    dup2(write_fd, STDOUT_FILENO);
+    dup2(write_fd, STDERR_FILENO);
+    close(write_fd);
+    if (!cwd.empty() && chdir(cwd.c_str()) != 0) _exit(127);
+    execl("/bin/sh", "sh", "-c", command.c_str(), (char*)nullptr);
+    _exit(127);
+}
+
+// Fork the shell command; on success return its pid and hand back the read end
+// of the pipe via `read_fd`. Returns -1 (with r.error set) on pipe/fork failure.
+pid_t spawn_command(const std::string& command, const std::string& cwd,
+                    int& read_fd, ToolResult& r) {
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        r.ok = false;
+        r.error = "pipe failed";
+        return -1;
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        r.ok = false;
+        r.error = "fork failed";
+        return -1;
+    }
+    if (pid == 0) {
+        close(pipefd[0]);
+        run_child(pipefd[1], cwd, command);
+    }
+    close(pipefd[1]);
+    read_fd = pipefd[0];
+    return pid;
+}
+
+// Assemble the combined output (with truncation notice), then either report the
+// timeout or the child's exit code into `r`.
+void format_result(std::string output, bool timed_out, int status, int timeout,
+                   ToolResult& r) {
+    bool truncated = output.size() >= kMaxOutput;
+    if (truncated) output.resize(kMaxOutput);
+
+    std::ostringstream out;
+    out << output;
+    if (!output.empty() && output.back() != '\n') out << '\n';
+    if (truncated) out << "[output truncated at " << kMaxOutput << " bytes]\n";
+
+    if (timed_out) {
+        out << "[command timed out after " << timeout << "s and was killed]";
+        r.ok = false;
+        r.output = out.str();
+        r.error = "timed out after " + std::to_string(timeout) + "s";
+        return;
+    }
+
+    int code = WIFEXITED(status)    ? WEXITSTATUS(status)
+               : WIFSIGNALED(status) ? 128 + WTERMSIG(status)
+                                     : -1;
+    out << "[exit " << code << "]";
+    r.output = out.str();
+    r.ok = (code == 0);
+    if (!r.ok) r.error = "command exited with status " + std::to_string(code);
+}
 } // namespace
 
 // bash: run a shell command inside the workspace root and return its combined
@@ -117,80 +203,28 @@ public:
 
     ToolResult execute(const json& a) const override {
         ToolResult r;
-        if (!a.contains("command") || !a["command"].is_string() ||
-            a["command"].get<std::string>().empty()) {
-            r.ok = false; r.error = "missing 'command'"; return r;
-        }
-        std::string command = a["command"].get<std::string>();
-        int timeout = static_cast<int>(a.value("timeout", 60));
-        if (timeout < 1) timeout = 1;
-        if (timeout > kMaxTimeout) timeout = kMaxTimeout;
+        std::string command;
+        int timeout = 60;
+        if (!parse_bash_args(a, command, timeout, r)) return r;
 
-        std::string cwd = Workspace::root();
-        int pipefd[2];
-        if (pipe(pipefd) != 0) {
-            r.ok = false; r.error = "pipe failed"; return r;
-        }
-
-        pid_t pid = fork();
-        if (pid < 0) {
-            close(pipefd[0]); close(pipefd[1]);
-            r.ok = false; r.error = "fork failed"; return r;
-        }
-
-        if (pid == 0) {
-            // Child: new process group, redirect stdout+stderr to the pipe,
-            // chdir into the workspace, then exec the shell.
-            setpgid(0, 0);
-            close(pipefd[0]);
-            dup2(pipefd[1], STDOUT_FILENO);
-            dup2(pipefd[1], STDERR_FILENO);
-            close(pipefd[1]);
-            if (!cwd.empty()) { if (chdir(cwd.c_str()) != 0) _exit(127); }
-            execl("/bin/sh", "sh", "-c", command.c_str(), (char*)nullptr);
-            _exit(127);  // exec failed
-        }
-
-        // Parent: read output with a wall-clock deadline; kill the child's
-        // process group if it overruns.
-        close(pipefd[1]);
+        int read_fd = -1;
+        pid_t pid = spawn_command(command, Workspace::root(), read_fd, r);
+        if (pid < 0) return r;
         setpgid(pid, pid);  // race-free with the child also setting it
 
         std::string output;
         bool child_done = false;
-        bool timed_out = run_with_timeout(pipefd[0], pid, timeout, output, child_done);
+        bool timed_out =
+            run_with_timeout(read_fd, pid, timeout, output, child_done);
 
-        // Reap the child (grab any final bytes on clean exit).
         int status = 0;
         if (!child_done) {
-            drain_output(pipefd[0], output);
+            drain_output(read_fd, output);
             waitpid(pid, &status, 0);
         }
-        close(pipefd[0]);
+        close(read_fd);
 
-        bool truncated = output.size() >= kMaxOutput;
-        if (truncated) output.resize(kMaxOutput);
-
-        std::ostringstream out;
-        out << output;
-        if (!output.empty() && output.back() != '\n') out << '\n';
-        if (truncated)
-            out << "[output truncated at " << kMaxOutput << " bytes]\n";
-
-        if (timed_out) {
-            out << "[command timed out after " << timeout << "s and was killed]";
-            r.ok = false;
-            r.output = out.str();
-            r.error = "timed out after " + std::to_string(timeout) + "s";
-            return r;
-        }
-
-        int code = WIFEXITED(status) ? WEXITSTATUS(status)
-                 : WIFSIGNALED(status) ? 128 + WTERMSIG(status) : -1;
-        out << "[exit " << code << "]";
-        r.output = out.str();
-        r.ok = (code == 0);
-        if (!r.ok) r.error = "command exited with status " + std::to_string(code);
+        format_result(std::move(output), timed_out, status, timeout, r);
         return r;
     }
 };
