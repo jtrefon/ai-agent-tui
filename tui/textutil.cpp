@@ -3,8 +3,41 @@
 
 #include "textutil.h"
 
+#include <cstring>
+#include <langinfo.h>
+
 namespace tui {
 namespace text {
+
+namespace {
+bool detect_utf8() {
+    const char* cs = nl_langinfo(CODESET);
+    if (!cs || (std::strcmp(cs, "UTF-8") != 0 && std::strcmp(cs, "utf8") != 0))
+        return false;                       // non-UTF-8 locale: bytes would
+                                            // render as garbage.
+    // PuTTY advertises itself via TERM=putty* but commonly runs with a Latin-1
+    // translation table, so even over a UTF-8 locale the multibyte glyphs show
+    // up as raw bytes. Fall back to ASCII for any PuTTY terminal.
+    const char* term = std::getenv("TERM");
+    if (term && std::strncmp(term, "putty", 5) == 0) return false;
+    return true;
+}
+} // namespace
+
+bool glyph::utf8() {
+    static const bool v = detect_utf8();
+    return v;
+}
+
+const char* glyph::tool()     { return utf8() ? "\u2728" : "*"; }
+const char* glyph::arrow()    { return utf8() ? "\u2192" : "->"; }
+const char* glyph::middot()   { return utf8() ? "\u00b7" : "-"; }
+const char* glyph::emdash()   { return utf8() ? "\u2014" : "-"; }
+const char* glyph::up()       { return utf8() ? "\u2191" : "^"; }
+const char* glyph::down()     { return utf8() ? "\u2193" : "v"; }
+const char* glyph::block_l()  { return utf8() ? "\u2590" : "|"; }
+const char* glyph::block_r()  { return utf8() ? "\u258c" : "|"; }
+const char* glyph::ellipsis() { return utf8() ? "\u2026" : "..."; }
 
 std::size_t utf8_len(const std::string& s, std::size_t i) {
     unsigned char c = static_cast<unsigned char>(s[i]);

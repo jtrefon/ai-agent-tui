@@ -30,6 +30,40 @@ std::vector<std::string> wrap(const std::string& text, int w);
 // API (mvaddnwstr), which places each glyph in one cell correctly.
 std::wstring to_wide(const std::string& s);
 
+// UI glyph selection. Many SSH/PuTTY sessions run in a non-UTF-8 locale (or
+// with a Latin-1 translation table), where raw UTF-8 bytes render as garbage
+// (e.g. "M-b\M-(" instead of ✨). These helpers return an ASCII fallback when
+// the active locale is not UTF-8, so decoration works on every terminal.
+namespace glyph {
+
+// True iff the process locale's character set is UTF-8.
+bool utf8();
+
+// Sparkle bullet used to prefix tool-call / tool-result lines.
+const char* tool();
+
+// Right arrow used in tool-result summaries ("→ exit 0").
+const char* arrow();
+
+// Middle dot used as a separator in the welcome banner.
+const char* middot();
+
+// Em dash used as a placeholder / separator in the status bar.
+const char* emdash();
+
+// Up / down arrows used in the stats gauge.
+const char* up();
+const char* down();
+
+// Left / right half-block used to build the activity gauge.
+const char* block_l();
+const char* block_r();
+
+// Horizontal ellipsis used for truncation in lists.
+const char* ellipsis();
+
+} // namespace glyph
+
 } // namespace text
 } // namespace tui
 

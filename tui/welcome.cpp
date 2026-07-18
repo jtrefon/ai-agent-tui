@@ -3,6 +3,7 @@
 
 #include "welcome.h"
 #include "widgets.h"
+#include "textutil.h"
 
 #include "agent/version.h"
 
@@ -72,7 +73,9 @@ void render(WINDOW* win, int start_y, int width) {
 
     wattron(win, COLOR_PAIR(P_BANNER));
     mvwaddstr(win, y++, xo, "");
-    mvwaddstr(win, y++, xo, ("        A M B E R  " + ver + "  \u00b7  " + date).c_str());
+    mvwaddstr(win, y++, xo,
+              ("        A M B E R  " + ver + "  " +
+               text::glyph::middot() + "  " + date).c_str());
     mvwaddstr(win, y++, xo, "        an AI agent for the amber-CRT age");
     mvwaddstr(win, y++, xo, "");
     mvwaddstr(win, y++, xo, "        /help      show commands & getting started");
@@ -85,7 +88,7 @@ void render(WINDOW* win, int start_y, int width) {
     mvwaddstr(win, y++, xo, "");
     std::string credit = "        transmission by ";
     credit += agent::kAuthor;
-    credit += "  \u00b7  (c) 2026 amber systems";
+    credit += "  " + std::string(text::glyph::middot()) + "  (c) 2026 amber systems";
     mvwaddstr(win, y++, xo, credit.c_str());
     wattroff(win, COLOR_PAIR(P_BANNER));
 }

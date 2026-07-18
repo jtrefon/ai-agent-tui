@@ -217,11 +217,11 @@ void Tui::session_browser() {
                 auto& m = all[idx];
                 std::string title = m.title;
                 if (static_cast<int>(title.size()) > title_w)
-                    title = title.substr(0, title_w - 1) + "\u2026";
+                    title = title.substr(0, title_w - 1) + text::glyph::ellipsis();
                 mvwaddnstr(w, row, x, title.c_str(), title_w);
                 x += title_w + 1;
                 std::string mod = m.model;
-                if (mod.size() > 10) mod = mod.substr(0, 9) + "\u2026";
+                if (mod.size() > 10) mod = mod.substr(0, 9) + text::glyph::ellipsis();
                 mvwaddstr(w, row, x, mod.c_str());
                 x += static_cast<int>(mod.size()) + 1;
                 char cnt[16];
@@ -244,7 +244,9 @@ void Tui::session_browser() {
 
         // Footer hint
         wattron(w, A_DIM);
-        mvwaddstr(w, ah, 1, "\u2191\u2193 nav  Enter load  Del remove  / search  Esc back");
+        mvwaddstr(w, ah, 1,
+                  (text::glyph::up() + std::string(text::glyph::down()) +
+                   " nav  Enter load  Del remove  / search  Esc back").c_str());
         wattroff(w, A_DIM);
 
         update_panels();

@@ -109,20 +109,21 @@ std::vector<Tui::Seg> Tui::bar_segments() const {
         std::snprintf(b, sizeof(b), "  lag %.0fms", stats_.latency_ms);
         segs.push_back({b, P_BAR_DIM, 6});
     } else {
-        segs.push_back({"  lag \u2014", P_BAR_DIM, 6});
+        segs.push_back({"  lag " + std::string(text::glyph::emdash()), P_BAR_DIM, 6});
     }
     if (stats_.tps > 0) {
         char b[32];
         std::snprintf(b, sizeof(b), "  %.0f t/s", stats_.tps);
         segs.push_back({b, P_BAR_DIM, 4});
     } else {
-        segs.push_back({"  \u2014 t/s", P_BAR_DIM, 4});
+        segs.push_back({"  " + std::string(text::glyph::emdash()) + " t/s", P_BAR_DIM, 4});
     }
     std::string up = stats_.prompt_tokens >= 0 ? kfmt(stats_.prompt_tokens)
-                                                : "\u2014";
+                                               : text::glyph::emdash();
     std::string dn = stats_.completion_tokens >= 0
-                         ? kfmt(stats_.completion_tokens) : "\u2014";
-    segs.push_back({"  \u2191" + up + " \u2193" + dn, P_BAR_DIM, 7});
+                         ? kfmt(stats_.completion_tokens) : text::glyph::emdash();
+    segs.push_back({"  " + std::string(text::glyph::up()) + up + " " +
+                    text::glyph::down() + dn, P_BAR_DIM, 7});
     return segs;
 }
 
@@ -238,9 +239,12 @@ void Tui::draw_status_bar(const std::string& tail) {
         put("  ctx ", P_BAR_DIM);
         int cells = std::min(24, std::max(6, (budget - x) - 14));
         if (cells > 0 && x < budget) {
-            put("\u2590", P_BAR_DIM);
-            put(agent::bar::gauge_bar(frac, cells), gauge_pair(frac));
-            put("\u258c", P_BAR_DIM);
+            put(text::glyph::block_l(), P_BAR_DIM);
+            std::string bar = text::glyph::utf8()
+                                  ? agent::bar::gauge_bar(frac, cells)
+                                  : agent::bar::gauge_bar_ascii(frac, cells);
+            put(bar, gauge_pair(frac));
+            put(text::glyph::block_r(), P_BAR_DIM);
             char b[48];
             std::snprintf(b, sizeof(b), " %d%% %s/%s",
                           static_cast<int>(frac * 100 + 0.5),

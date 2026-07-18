@@ -25,7 +25,13 @@ std::string kfmt(long n);
 // in [0,1], using eighth-block glyphs (U+258F..U+2588) for sub-cell resolution
 // and light-shade (U+2591) for the empty track. Returns bar glyphs only (no
 // brackets or percentage). f is clamped to [0,1]; cells<=0 yields "".
+// Use this on terminals that advertise a UTF-8 locale.
 std::string gauge_bar(double frac, int cells);
+
+// ASCII fallback gauge for non-UTF-8 terminals (e.g. PuTTY with a Latin-1
+// translation table): '#' filled, space for the track, no sub-cell resolution.
+// f is clamped to [0,1]; cells<=0 yields "".
+std::string gauge_bar_ascii(double frac, int cells);
 
 // Count of filled whole cells (used by tests to assert fill precision).
 int gauge_full_cells(double frac, int cells);

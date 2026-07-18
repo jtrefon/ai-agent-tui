@@ -115,7 +115,8 @@ bool Tui::drain_events() {
                 std::string args = ev.tool_args.dump();
                 if (args.size() > 60) args = args.substr(0, 57) + "...";
                 if (fold == ToolFold::Auto)
-                    append_line(P_STATUS, "\u2728 " + ev.tool_name + " " + args);
+                    append_line(P_STATUS, std::string(text::glyph::tool()) + " " +
+                                ev.tool_name + " " + args);
                 else
                     append_line(P_STATUS, "tool: " + ev.tool_name + " " + args);
             }
@@ -127,7 +128,10 @@ bool Tui::drain_events() {
             // Build a compact summary line.
             auto summarize = [](const std::string& name,
                                 const agent::ToolResult& r) -> std::string {
-                if (!r.ok) return "\u2728 " + name + "  \u2192 error: " + r.error;
+                const char* sp = text::glyph::tool();
+                const char* ar = text::glyph::arrow();
+                if (!r.ok) return std::string(sp) + " " + name + "  " +
+                                   ar + " error: " + r.error;
                 // Count lines in output.
                 int lines = 1;
                 for (char c : r.output) if (c == '\n') ++lines;
@@ -135,7 +139,7 @@ bool Tui::drain_events() {
                 size_t nl = preview.find('\n');
                 if (nl != std::string::npos) preview = preview.substr(0, nl);
                 if (preview.size() > 60) preview = preview.substr(0, 57) + "...";
-                return "\u2728 " + name + "  \u2192 exit 0  (" +
+                return std::string(sp) + " " + name + "  " + ar + " exit 0  (" +
                        std::to_string(lines) + " lines)  " + preview;
             };
             std::string line = summarize(ev.tool_name, ev.tool_result);
@@ -145,7 +149,7 @@ bool Tui::drain_events() {
                 bool replaced = false;
                 for (int i = static_cast<int>(lines.size()) - 1; i >= 0; --i) {
                     if (lines[i].first == P_STATUS &&
-                        lines[i].second.rfind("\u2728", 0) == 0) {
+                        lines[i].second.rfind(text::glyph::tool(), 0) == 0) {
                         lines[i].second = line;
                         replaced = true;
                         break;
