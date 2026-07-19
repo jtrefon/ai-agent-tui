@@ -126,6 +126,12 @@ private:
     void trim_lines();
 
     // ---- rendering ------------------------------------------------------
+    // Stage-only redraw helpers write to stdscr without flushing; flush()
+    // performs the single physical update per tick (ncurses best practice:
+    // wnoutrefresh + one doupdate, instead of per-call refresh() that forces a
+    // full-screen repaint on every change and causes flicker).
+    void flush() { doupdate(); }
+
     struct Seg {
         std::string text;
         int pair = tui::P_BANNER;
@@ -217,6 +223,9 @@ private:
     long ctx_used_ = -1;
     agent::ServerInfo last_detected_;
     int anim_phase_ = 0;
+    bool dirty_ = true;          // coalesce redraws into one flush per tick
+    std::string last_input_;     // for change detection on idle ticks
+    int last_status_phase_ = -1; // throttles the animated status indicator
 };
 
 } // namespace tui

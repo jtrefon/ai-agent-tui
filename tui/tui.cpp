@@ -228,7 +228,10 @@ void Tui::resolve_approval(const AgentEvent& ev) {
 }
 
 void Tui::pump_events() {
-    if (drain_events()) draw();
+    if (drain_events()) {
+        draw();
+        flush();
+    }
 }
 
 void Tui::send_async(const std::string& prompt) {
@@ -369,6 +372,7 @@ void Tui::agent_worker(const std::string& prompt) {
 void Tui::run() {
     draw();
     draw_input("");
+    flush();
     detect_server(false);
 
     timeout(50);
@@ -381,10 +385,18 @@ void Tui::run() {
         if (ch == ERR) {
             if (had_events) {
                 draw();
-            } else {
+            } else if (anim_phase_ != last_status_phase_) {
+                // Repaint only when the animated status indicator actually
+                // advanced its phase, so we don't force a full-screen refresh
+                // at 20Hz while idle (the main source of the flicker).
                 tick_clock();
+                last_status_phase_ = anim_phase_;
             }
-            draw_input(input);
+            if (input != last_input_) {
+                draw_input(input);
+                last_input_ = input;
+            }
+            if (dirty_) flush();
             continue;
         }
         if (ch == 14) {
@@ -527,6 +539,10 @@ void Tui::run() {
             update_drawer(input);
             ensure_chat_window();
             draw(); draw_input(input);
+        }
+        if (dirty_) {
+            flush();
+            dirty_ = false;
         }
     }
 }

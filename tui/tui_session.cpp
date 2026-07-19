@@ -329,6 +329,7 @@ void Tui::redraw_after_modal() {
     touchwin(stdscr);
     draw();
     draw_input("");
+    flush();
 }
 
 } // namespace tui

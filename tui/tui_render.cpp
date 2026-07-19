@@ -28,6 +28,8 @@ void Tui::redraw(const std::string& input) {
     touchwin(stdscr);
     draw();
     draw_input(input);
+    flush();
+    dirty_ = true;
 }
 
 size_t Tui::utf8_len(const std::string& s, size_t i) {
@@ -159,11 +161,12 @@ std::vector<Tui::Seg> Tui::bar_segments() const {
 }
 
 void Tui::draw() {
+    dirty_ = true;
     if (win().welcome_art) {
         erase();
         welcome::render(stdscr, chat_top(), width());
         draw_status_bar("welcome");
-        refresh();
+        wnoutrefresh(stdscr);
         return;
     }
 
@@ -201,7 +204,7 @@ void Tui::draw() {
 
     draw_status_bar("ln " + std::to_string(win().scroll_top + 1) + "/" +
                     std::to_string(chat_canvas_.wrapped_count()));
-    refresh();
+    wnoutrefresh(stdscr);
 }
 
 void Tui::draw_status_bar(const std::string& tail) {
@@ -328,16 +331,19 @@ void Tui::draw_status_bar(const std::string& tail) {
 }
 
 void Tui::tick_clock() {
+    dirty_ = true;
     int total = static_cast<int>(win().lines.size());
     if (!win().stream_buf.empty()) total += stream_lines();
     int start = std::min(win().scroll_top,
                          std::max(0, total - chat_height()));
     draw_status_bar("ln " + std::to_string(start + 1) + "/" +
-                    std::to_string(total));
-    refresh();
+                     std::to_string(total));
+    wnoutrefresh(stdscr);
 }
 
 void Tui::draw_input(const std::string& s) {
+    dirty_ = true;
+    last_input_ = s;
     draw_drawer(s);
     int y = height() - 1;
     move(y, 0);
@@ -350,7 +356,7 @@ void Tui::draw_input(const std::string& s) {
     int cx = std::min(display_cols(shown), width() - 1);
     curs_set(1);
     move(y, cx);
-    refresh();
+    wnoutrefresh(stdscr);
 }
 
 void Tui::update_drawer(const std::string& input) {
@@ -463,7 +469,7 @@ int Tui::drawer_menu(const std::string& title,
             if (cur) attroff(COLOR_PAIR(P_BUTTON_ACT) | A_BOLD);
             else attroff(COLOR_PAIR(P_ASSISTANT));
         }
-        refresh();
+        doupdate();
 
         int c = getch();
         int n = static_cast<int>(items.size());
