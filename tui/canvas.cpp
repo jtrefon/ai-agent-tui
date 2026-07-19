@@ -23,7 +23,13 @@ void Canvas::resize(int y, int h, int w) {
     y_ = y; rows_ = h; cols_ = w;
     if (win_) delwin(win_);
     win_ = newwin(h, w, y, 0);
-    if (win_) keypad(win_, TRUE);
+    if (win_) {
+        keypad(win_, TRUE);
+        // The chat scrollback never holds the cursor; leaving it on lets
+        // doupdate() reliably place the physical cursor on the input line
+        // (stdscr) instead of snapping it back to the canvas origin.
+        leaveok(win_, TRUE);
+    }
     rewrap();
 }
 
