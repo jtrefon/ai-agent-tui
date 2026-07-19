@@ -43,7 +43,7 @@ std::string Tui::timestamp() {
     std::tm tm{};
     localtime_r(&t, &tm);
     char buf[16];
-    std::strftime(buf, sizeof(buf), "[%H:%M] ", &tm);
+    std::strftime(buf, sizeof(buf), "[%H:%M:%S] ", &tm);
     return buf;
 }
 void Tui::append_line(int color, const std::string& text) {
@@ -55,7 +55,7 @@ void Tui::append_line_ts(int color, const std::string& text,
     // then wrap it to the current width so wrapped continuations align.
     rich::Line head;
     if (!ts.empty())
-        head.runs.push_back({ts, P_BAR_DIM, false, true});  // dim timestamp
+        head.runs.push_back({ts, P_REASONING, false, true});  // faint timestamp
     rich::Run body; body.pair = color; body.text = text;
     head.runs.push_back(body);
     auto wrapped = rich::wrap(head, width());
