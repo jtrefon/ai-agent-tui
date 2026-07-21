@@ -203,6 +203,8 @@ private:
     void job_read(const std::string& id);
     void job_start(const std::string& cmd);
     void request_quit();
+public:
+    void save_workspace_now();
     void redraw_after_modal();
     void toggle_thinking();
     void cmd_policy(const std::string& arg);

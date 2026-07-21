@@ -387,6 +387,18 @@ void Tui::close_window() {
 }
 
 void Tui::request_quit() { quit_ = true; }
+
+void Tui::save_workspace_now() {
+    agent::WorkspaceState ws;
+    for (const auto& w : windows_) {
+        agent::WorkspaceState::WindowEntry we;
+        we.session_id = w->session_id;
+        we.title = w->title;
+        ws.windows.push_back(we);
+    }
+    ws.active = active_;
+    store_.save_workspace(ws);
+}
 void Tui::redraw_after_modal() {
     modal_open_ = false;
     // Resolve any approvals that arrived while a modal dialog was open. Each

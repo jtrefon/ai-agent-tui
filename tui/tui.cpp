@@ -12,16 +12,27 @@
 #include "welcome.h"
 
 #include <clocale>
+#include <csignal>
 #include <ctime>
 #include <functional>
 
 namespace tui {
 
+// Signal handler saves workspace before the process dies (SIGHUP/SIGTERM).
+// The pointer is set once in the Tui constructor and cleared in the destructor.
+static Tui* signal_tui_instance = nullptr;
+static void signal_handler(int sig) {
+    (void)sig;
+    if (signal_tui_instance)
+        signal_tui_instance->save_workspace_now();
+    _Exit(1);
+}
+
 Tui::Tui(agent::Config cfg, agent::ToolRegistry& reg, agent::JobService& jobs)
     : cfg_(std::move(cfg)), reg_(reg), jobs_(jobs) {
     std::setlocale(LC_ALL, "");
     initscr();
-    cbreak();
+    raw();        // capture Ctrl-C as keypress (ASCII 3) instead of SIGINT
     noecho();
     keypad(stdscr, TRUE);
     set_escdelay(25);
@@ -39,6 +50,11 @@ Tui::Tui(agent::Config cfg, agent::ToolRegistry& reg, agent::JobService& jobs)
     use_legacy_coding(1);
     init_pairs();
 
+    // Signal handler ensures workspace is saved on terminal close / kill.
+    signal_tui_instance = this;
+    std::signal(SIGHUP, signal_handler);
+    std::signal(SIGTERM, signal_handler);
+
     // Restore previous workspace: open windows with session references,
     // but defer actual session data loading until the window is activated.
     auto ws = store_.load_workspace();
@@ -55,19 +71,11 @@ Tui::Tui(agent::Config cfg, agent::ToolRegistry& reg, agent::JobService& jobs)
 }
 
 Tui::~Tui() {
+    signal_tui_instance = nullptr;
     std::fputs("\033[?1007l", stdout);
     std::fflush(stdout);
 
-    // Persist workspace state so the next launch restores the same layout.
-    agent::WorkspaceState ws;
-    for (const auto& w : windows_) {
-        agent::WorkspaceState::WindowEntry we;
-        we.session_id = w->session_id;
-        we.title = w->title;
-        ws.windows.push_back(we);
-    }
-    ws.active = active_;
-    store_.save_workspace(ws);
+    save_workspace_now();
 
     agent_cancel_ = true;
     if (agent_thread_.joinable()) agent_thread_.join();
@@ -462,13 +470,9 @@ void Tui::run() {
                     repainted = true;
                 }
             }
-            // Any background repaint (streamed tokens or the status tick) moves
-            // the virtual cursor off the input line; park it back so the caret
-            // stays put instead of jumping to the status bar while the agent runs.
-            if (repainted || input != last_input_) {
-                draw_input(input);
-                last_input_ = input;
-            }
+            // Any background repaint moves the virtual cursor off the input
+            // line; always park it back so the caret stays in place.
+            draw_input(input);
             if (!agent_busy_.load() && !pending_prompt_.empty()) {
                 std::string p = std::move(pending_prompt_);
                 send_async(p);
@@ -577,6 +581,11 @@ void Tui::run() {
             }
             draw_input(input);
             continue;
+        }
+        if (ch == 3) {  // Ctrl-C: save and exit
+            save_workspace_now();
+            quit_ = true;
+            break;
         }
         if (ch == KEY_UP && !drawer_open_) {
             win().scroll_top = std::max(0, win().scroll_top - 1);
