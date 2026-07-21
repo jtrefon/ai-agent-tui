@@ -423,6 +423,13 @@ void Tui::cmd_compress(const std::string&) {
         append_line(P_STATUS, "compress: no compressor configured");
         return;
     }
+
+    // Recalculate context gauge from compressed history
+    size_t total_chars = 0;
+    for (const auto& msg : w.agent->history())
+        total_chars += msg.content.size() + msg.reasoning.size();
+    ctx_used_ = static_cast<long>(total_chars / 4);
+
     if (r.messages_after >= r.messages_before) {
         append_line(P_STATUS, "compress: nothing to prune ("
                     + std::to_string(r.messages_before)
@@ -446,6 +453,7 @@ void Tui::cmd_compress(const std::string&) {
                     + " memories, " + std::to_string(ext.new_skills)
                     + " skills");
     }
+    dirty_ = true;
 }
 
 void Tui::cmd_job(const std::string& arg) {
