@@ -136,8 +136,7 @@ Message Agent::chat_once(const std::vector<Tool*>& tools, bool display) {
         std::thread([this]() {
             TreeShaker shaker;
             auto tags = shaker.classify(history_);
-
-            // Simple extractor: scan for informative tool results.
+            size_t n = 0;
             for (size_t i = 0; i < history_.size() && i < tags.size(); ++i) {
                 if (tags[i] != Classification::prune &&
                     history_[i].role == "tool" &&
@@ -150,11 +149,13 @@ Message Agent::chat_once(const std::vector<Tool*>& tools, bool display) {
                     mem.tags = {history_[i].name};
                     mem.evidence_count = 1;
                     memory_store_->upsert(mem);
+                    ++n;
                 }
             }
             memory_store_->decay_all();
             if (!experience_cfg_.store_path.empty())
                 memory_store_->save(experience_cfg_.store_path);
+            last_extraction_.new_memories += n;
         }).detach();
     }
 
@@ -173,13 +174,36 @@ const AgentHooks& Agent::silent_hooks() const {
     return silent;
 }
 
-void Agent::compress_now() {
-    if (!compression_) return;
+CompressionResult Agent::compress_now() {
+    CompressionResult r;
+    if (!compression_) return r;
+
     auto cc = load_compression_config(cfg_);
     auto compressed = compression_->compress(history_, cc);
+
+    // Count tokens before (chars/4)
+    for (const auto& msg : history_)
+        r.tokens_before += (msg.content.size() + msg.reasoning.size()) / 4;
+    r.messages_before = history_.size();
+
     if (!compressed.empty() && compressed.size() < history_.size()) {
+        // Run a quick TreeShaker to get classification counts
+        TreeShaker shaker;
+        auto tags = shaker.classify(history_);
+        for (auto t : tags) {
+            if (t == Classification::core) ++r.core_count;
+            else if (t == Classification::context) ++r.context_count;
+            else if (t == Classification::prune) ++r.prune_count;
+        }
         history_ = std::move(compressed);
     }
+
+    for (const auto& msg : history_)
+        r.tokens_after += (msg.content.size() + msg.reasoning.size()) / 4;
+    r.messages_after = history_.size();
+
+    last_compression_ = r;
+    return r;
 }
 
 void Agent::reset() {

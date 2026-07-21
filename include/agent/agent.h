@@ -97,7 +97,22 @@ public:
 
     // Force an immediate compression of the conversation history, bypassing
     // the gate.  Has no effect if no compressor is configured.
-    void compress_now();
+    // Returns a summary of what happened (or empty if no-op).
+    CompressionResult compress_now();
+
+    // Result of the most recent compression, or default-constructed if none.
+    const CompressionResult& last_compression_result() const {
+        return last_compression_;
+    }
+
+    // Number of memories and skills extracted during the last async pass.
+    struct ExtractionResult {
+        size_t new_memories = 0;
+        size_t new_skills = 0;
+    };
+    ExtractionResult last_extraction_result() const {
+        return last_extraction_;
+    }
 
     // Replace the UI callbacks. Lets a long-lived agent receive fresh closures
     // each turn (e.g. a TUI window rebinding lambdas that capture live state).
@@ -142,6 +157,8 @@ private:
     std::unique_ptr<MemoryRetriever> retriever_;
     ExperienceConfig experience_cfg_;
     size_t turn_counter_ = 0;
+    CompressionResult last_compression_;
+    ExtractionResult last_extraction_;
 };
 
 } // namespace agent

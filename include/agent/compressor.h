@@ -55,6 +55,17 @@ struct CompressionBudget {
     double headroom = 0.50;  // model output space
 };
 
+// Result statistics from a compression run.
+struct CompressionResult {
+    size_t messages_before = 0;
+    size_t messages_after = 0;
+    size_t tokens_before = 0;   // approximate (chars/4)
+    size_t tokens_after = 0;
+    size_t core_count = 0;
+    size_t context_count = 0;
+    size_t prune_count = 0;
+};
+
 // Compression configuration.  Loaded from amber.conf [compression] section.
 struct CompressionConfig {
     double threshold        = 0.75;   // trigger at 75% utilisation

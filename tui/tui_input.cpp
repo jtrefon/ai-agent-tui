@@ -418,12 +418,34 @@ void Tui::cmd_compress(const std::string&) {
         append_line(P_STATUS, "no active session to compress");
         return;
     }
-    size_t before = w.agent->history().size();
-    w.agent->compress_now();
-    size_t after = w.agent->history().size();
+    auto r = w.agent->compress_now();
+    if (r.messages_before == 0) {
+        append_line(P_STATUS, "compress: no compressor configured");
+        return;
+    }
+    if (r.messages_after >= r.messages_before) {
+        append_line(P_STATUS, "compress: nothing to prune ("
+                    + std::to_string(r.messages_before)
+                    + " messages, ~" + std::to_string(r.tokens_before)
+                    + " tokens)");
+        return;
+    }
     append_line(P_STATUS,
-                "compressed: " + std::to_string(before) + " → "
-                + std::to_string(after) + " messages");
+                "compress: " + std::to_string(r.messages_before)
+                + " → " + std::to_string(r.messages_after)
+                + " msgs, ~" + std::to_string(r.tokens_before)
+                + " → ~" + std::to_string(r.tokens_after) + " tokens"
+                + "  (core:" + std::to_string(r.core_count)
+                + " ctx:" + std::to_string(r.context_count)
+                + " prune:" + std::to_string(r.prune_count) + ")");
+
+    auto ext = w.agent->last_extraction_result();
+    if (ext.new_memories > 0 || ext.new_skills > 0) {
+        append_line(P_STATUS,
+                    "  extracted: " + std::to_string(ext.new_memories)
+                    + " memories, " + std::to_string(ext.new_skills)
+                    + " skills");
+    }
 }
 
 void Tui::cmd_job(const std::string& arg) {
