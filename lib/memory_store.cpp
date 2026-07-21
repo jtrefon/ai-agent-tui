@@ -90,10 +90,10 @@ Skill json_to_skill(const json& j) {
 
 class JsonMemoryStore : public MemoryStore {
 public:
-    explicit JsonMemoryStore(const ExperienceConfig& cfg)
-        : cfg_(cfg) {
+    explicit JsonMemoryStore(ExperienceConfig cfg)
+        : cfg_(std::move(cfg)) {
         if (!cfg_.store_path.empty())
-            load(cfg_.store_path);
+            load(cfg_.store_path);  // NOLINT: safe, no subclasses override
     }
 
     void upsert(const Memory& memory) override {
@@ -117,7 +117,7 @@ public:
         scored.reserve(memories_.size());
         for (const auto& [id, mem] : memories_) {
             double rel = compute_relevance(user_message, mem.tags);
-            double score = mem.evidence_count * 0.5 + rel * 0.3
+            double score = (mem.evidence_count * 0.5) + (rel * 0.3)
                            + 0.2;  // freshness placeholder
             scored.emplace_back(score, mem);
         }

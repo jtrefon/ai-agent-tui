@@ -26,10 +26,9 @@ bool is_decision_or_preference(const Message& msg) {
         "decided", "decide", "choice", "prefer", "preference",
         "let's use", "I'll use", "going with", "chosen"
     };
-    for (const auto& cue : cues) {
-        if (msg.content.find(cue) != std::string::npos) return true;
-    }
-    return false;
+    return std::any_of(cues.begin(), cues.end(), [&](const std::string& cue) {
+        return msg.content.find(cue) != std::string::npos;
+    });
 }
 
 bool is_stale_tool_result(const Message& msg, size_t idx,
@@ -89,21 +88,15 @@ std::vector<Classification> TreeShaker::classify(
     for (size_t i = 0; i < history.size(); ++i) {
         const auto& msg = history[i];
 
-        if (i >= active_root) {
-            tags.push_back(Classification::core);
-        } else if (is_decision_or_preference(msg)) {
-            tags.push_back(Classification::core);
-        } else if (is_diagnostic_output(msg)) {
-            tags.push_back(Classification::prune);
-        } else if (is_superseded_attempt(msg, i, history)) {
-            tags.push_back(Classification::prune);
-        } else if (is_stale_tool_result(msg, i, history)) {
-            tags.push_back(Classification::context);
+        Classification tag = Classification::context;
+        if (i >= active_root || is_decision_or_preference(msg)) {
+            tag = Classification::core;
+        } else if (is_diagnostic_output(msg) || is_superseded_attempt(msg, i, history)) {
+            tag = Classification::prune;
         } else if (msg.role == "assistant" && !msg.reasoning.empty()) {
-            tags.push_back(Classification::context);
-        } else {
-            tags.push_back(Classification::context);
+            tag = Classification::context;
         }
+        tags.push_back(tag);
     }
 
     return tags;
@@ -118,8 +111,8 @@ public:
     explicit DefaultCompressionGate(const CompressionConfig& cfg);
     bool should_compress(const std::vector<Message>& history,
                           const Config& agent_cfg) const override;
-    void set_last_compress_turn(size_t turn);
-    bool is_within_cooldown(size_t current_turn) const;
+    void set_last_compress_turn(size_t turn) override;
+    bool is_within_cooldown(size_t current_turn) const override;
 private:
     bool threshold_exceeded(const std::vector<Message>& history,
                              const Config& agent_cfg) const;
@@ -129,7 +122,7 @@ private:
 };
 
 DefaultCompressionGate::DefaultCompressionGate(const CompressionConfig& cfg)
-    : cfg_(cfg), last_compress_turn_(0) {}
+    : cfg_(cfg) {}
 
 bool DefaultCompressionGate::should_compress(
     const std::vector<Message>& history,
@@ -146,7 +139,7 @@ bool DefaultCompressionGate::threshold_exceeded(
     size_t total_chars = 0;
     for (const auto& msg : history)
         total_chars += msg.content.size() + msg.reasoning.size();
-    double utilisation = static_cast<double>(total_chars / 4)
+    double utilisation = (static_cast<double>(total_chars) / 4.0)
                          / static_cast<double>(agent_cfg.context_size);
     return utilisation >= cfg_.threshold;
 }

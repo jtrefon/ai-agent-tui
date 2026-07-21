@@ -34,10 +34,9 @@ bool is_skill_candidate(const Message& msg) {
         "to run", "to build", "to test", "you can", "try running",
         "the command", "use", "run:", "execute"
     };
-    for (const auto& cue : cues) {
-        if (msg.content.find(cue) != std::string::npos) return true;
-    }
-    return false;
+    return std::any_of(cues.begin(), cues.end(), [&](const std::string& cue) {
+        return msg.content.find(cue) != std::string::npos;
+    });
 }
 
 // Crude extraction: grab the first substantive line.
@@ -56,8 +55,8 @@ std::string first_line(const std::string& s) {
 class ExperienceExtractor : public CompressionObserver {
 public:
     explicit ExperienceExtractor(MemoryStore& store,
-                                  const ExperienceConfig& cfg)
-        : store_(store), cfg_(cfg) {}
+                                  ExperienceConfig cfg)
+        : store_(store), cfg_(std::move(cfg)) {}
 
     void on_compression_complete(
         const std::vector<Message>& history,

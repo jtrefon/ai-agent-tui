@@ -4,6 +4,8 @@
 #include "tui.h"
 
 #include <agent.h>
+#include <agent/compressor.h>
+#include <agent/experience.h>
 
 #include "widgets.h"
 #include "textutil.h"
@@ -48,7 +50,16 @@ Tui::~Tui() {
 Window& Tui::new_window(const std::string& title) {
     auto w = std::make_unique<Window>();
     w->title = title;
-    w->agent = std::make_unique<agent::Agent>(cfg_, reg_);
+    auto comp_cfg = agent::load_compression_config(cfg_);
+    auto gate = agent::make_compression_gate(comp_cfg);
+    auto compressor = agent::make_compressor(comp_cfg);
+    auto exp_cfg = agent::load_experience_config(cfg_);
+    auto mem_store = agent::make_memory_store(exp_cfg);
+    auto retriever = std::make_unique<agent::MemoryRetriever>(*mem_store);
+    w->agent = std::make_unique<agent::Agent>(cfg_, reg_,
+        agent::AgentHooks{},
+        std::move(compressor), std::move(gate),
+        std::move(mem_store), std::move(retriever));
     windows_.push_back(std::move(w));
     active_ = windows_.size() - 1;
     return *windows_.back();
