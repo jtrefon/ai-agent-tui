@@ -1881,15 +1881,16 @@ TEST(integration_compress_extract_retrieve) {
     // The last user message should be core (active task)
     ASSERT(tags[tags.size() - 1] == agent::Classification::core);
 
-    // Diagnostic reads before the active task should be pruned
-    bool found_prune = false;
-    for (size_t i = 0; i < tags.size(); ++i) {
-        if (tags[i] == agent::Classification::prune) {
-            found_prune = true;
+    // Context-tagged turns (completed sub-tasks, stale tool results)
+    // should exist before the active task.
+    bool found_context = false;
+    for (size_t i = 0; i < tags.size() - 1; ++i) {
+        if (tags[i] == agent::Classification::context) {
+            found_context = true;
             break;
         }
     }
-    ASSERT(found_prune);
+    ASSERT(found_context);
 
     // Phase 2: Compress
     auto compressor = agent::make_compressor(agent::CompressionConfig{});
