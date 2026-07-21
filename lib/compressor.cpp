@@ -75,13 +75,6 @@ size_t find_last_user_message(const std::vector<Message>& history) {
 // TreeShaker  --  classifies every turn in the conversation
 // -----------------------------------------------------------------------
 
-class TreeShaker {
-public:
-    TreeShaker();
-    std::vector<Classification> classify(
-        const std::vector<Message>& history) const;
-};
-
 TreeShaker::TreeShaker() = default;
 
 std::vector<Classification> TreeShaker::classify(

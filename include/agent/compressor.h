@@ -74,6 +74,11 @@ public:
     virtual ~CompressionGate() = default;
     virtual bool should_compress(const std::vector<Message>& history,
                                   const Config& agent_cfg) const = 0;
+    // Optional: track when compression last ran for cooldown.
+    virtual void set_last_compress_turn(size_t turn) { (void)turn; }
+    virtual bool is_within_cooldown(size_t current_turn) const {
+        (void)current_turn; return false;
+    }
 };
 
 // Transforms a full history into a compressed prompt.
@@ -83,6 +88,17 @@ public:
     virtual std::vector<Message> compress(
         const std::vector<Message>& history,
         const CompressionConfig& cfg) = 0;
+};
+
+// ---------------------------------------------------------------------------
+// TreeShaker  —  classifies every turn in the conversation
+// ---------------------------------------------------------------------------
+
+class TreeShaker {
+public:
+    TreeShaker();
+    std::vector<Classification> classify(
+        const std::vector<Message>& history) const;
 };
 
 // ---------------------------------------------------------------------------

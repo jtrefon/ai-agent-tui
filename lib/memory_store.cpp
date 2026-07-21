@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <unordered_set>
 
@@ -210,6 +211,17 @@ private:
 
 std::unique_ptr<MemoryStore> make_memory_store(const ExperienceConfig& cfg) {
     return std::make_unique<JsonMemoryStore>(cfg);
+}
+
+ExperienceConfig load_experience_config(const Config& cfg) {
+    ExperienceConfig ec;
+    // TODO: read from amber.conf [experience] section.
+    (void)cfg;
+    if (ec.store_path.empty()) {
+        const char* home = std::getenv("HOME");
+        if (home) ec.store_path = std::string(home) + "/.amber/memories.json";
+    }
+    return ec;
 }
 
 } // namespace agent

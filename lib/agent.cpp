@@ -14,8 +14,18 @@
 
 namespace agent {
 
-Agent::Agent(const Config& cfg, ToolRegistry& registry, AgentHooks hooks)
-    : cfg_(cfg), registry_(registry), client_(cfg), hooks_(std::move(hooks)) {}
+Agent::Agent(const Config& cfg, ToolRegistry& registry, AgentHooks hooks,
+             std::unique_ptr<CompressionStrategy> compressor,
+             std::unique_ptr<CompressionGate> gate,
+             std::unique_ptr<MemoryStore> memory_store,
+             std::unique_ptr<MemoryRetriever> retriever)
+    : cfg_(cfg), registry_(registry), client_(cfg), hooks_(std::move(hooks))
+    , compression_(std::move(compressor))
+    , gate_(std::move(gate))
+    , memory_store_(std::move(memory_store))
+    , retriever_(std::move(retriever)) {
+    experience_cfg_ = load_experience_config(cfg_);
+}
 
 void Agent::ensure_system_prompt() {
     if (!history_.empty() && history_.front().role == "system") return;
@@ -66,13 +76,45 @@ Message Agent::chat_once(const std::vector<Tool*>& tools, bool display) {
     Stats stats;
     if (hooks_.on_debug) hooks_.on_debug("chat: request");
     if (hooks_.on_state) hooks_.on_state(RunState::Waiting);
+
+    // Build the prompt: start with a copy of history so we can augment without
+    // modifying the stored conversation.
+    auto prompt_msgs = history_;
+
+    // Inject memories into the system message (copy only, not stored history).
+    if (retriever_) {
+        std::string user_msg;
+        for (const auto& m : prompt_msgs)
+            if (m.role == "user") { user_msg = m.content; break; }
+        auto suffix = retriever_->build_system_prompt_suffix(user_msg, 500);
+        if (!suffix.empty()) {
+            for (auto& msg : prompt_msgs) {
+                if (msg.role == "system") {
+                    msg.content += suffix;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Check compression gate.  If triggered, compress non-system messages.
+    bool did_compress = false;
+    if (gate_) {
+        if (gate_->should_compress(history_, cfg_)) {
+            auto cc = load_compression_config(cfg_);
+            prompt_msgs = compression_->compress(prompt_msgs, cc);
+            gate_->set_last_compress_turn(turn_counter_);
+            did_compress = true;
+        }
+    }
+
     // The internal confirmation exchange (confirm_turn) must not paint tokens
     // into the scrollback — otherwise the model's literal "done." leaks into
     // the displayed conversation. We keep state transitions so the UI stays
     // honest about activity, but drop token/reasoning/assistant callbacks.
     const AgentHooks& h = display ? hooks_ : silent_hooks();
     if (cfg_.stream) {
-        reply = client_.chat_stream(history_, tools,
+        reply = client_.chat_stream(prompt_msgs, tools,
             [&h](const StreamChunk& ch) {
                 if (ch.done) return;
                 if (!ch.reasoning.empty()) {
@@ -85,9 +127,38 @@ Message Agent::chat_once(const std::vector<Tool*>& tools, bool display) {
                 }
             }, &stats);
     } else {
-        reply = client_.chat(history_, tools, &stats);
+        reply = client_.chat(prompt_msgs, tools, &stats);
     }
     if (stats.valid && hooks_.on_stats) hooks_.on_stats(stats);
+
+    // If compression ran, fire async experience extraction.
+    if (did_compress && memory_store_ && experience_cfg_.enabled) {
+        std::thread([this]() {
+            TreeShaker shaker;
+            auto tags = shaker.classify(history_);
+
+            // Simple extractor: scan for informative tool results.
+            for (size_t i = 0; i < history_.size() && i < tags.size(); ++i) {
+                if (tags[i] != Classification::prune &&
+                    history_[i].role == "tool" &&
+                    history_[i].content.size() > 50) {
+                    Memory mem;
+                    auto nl = history_[i].content.find('\n');
+                    mem.content = (nl == std::string::npos)
+                        ? history_[i].content.substr(0, 200)
+                        : history_[i].content.substr(0, nl);
+                    mem.tags = {history_[i].name};
+                    mem.evidence_count = 1;
+                    memory_store_->upsert(mem);
+                }
+            }
+            memory_store_->decay_all();
+            if (!experience_cfg_.store_path.empty())
+                memory_store_->save(experience_cfg_.store_path);
+        }).detach();
+    }
+
+    ++turn_counter_;
     return reply;
 }
 

@@ -2,6 +2,8 @@
 // Copyright 2026 Jacek Trefon (www.trefon.com)
 
 #include <agent.h>
+#include <agent/compressor.h>
+#include <agent/experience.h>
 #include <cctype>
 #include <cstring>
 #include <iostream>
@@ -140,8 +142,18 @@ int main(int argc, char** argv) {
         return agent::Approval::Deny;
     };
 
+    // Build compression + experience pipeline
+    auto comp_cfg = agent::load_compression_config(cfg);
+    auto gate = agent::make_compression_gate(comp_cfg);
+    auto compressor = agent::make_compressor(comp_cfg);
+    auto exp_cfg = agent::load_experience_config(cfg);
+    auto mem_store = agent::make_memory_store(exp_cfg);
+    auto retriever = std::make_unique<agent::MemoryRetriever>(*mem_store);
+
     try {
-        agent::Agent agent(cfg, registry, hooks);
+        agent::Agent agent(cfg, registry, hooks,
+                           std::move(compressor), std::move(gate),
+                           std::move(mem_store), std::move(retriever));
         std::string reply = agent.run(prompt);
         std::cout << "\n" << reply << "\n";
     } catch (const std::exception& e) {

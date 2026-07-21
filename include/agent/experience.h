@@ -105,6 +105,7 @@ private:
 // ---------------------------------------------------------------------------
 
 std::unique_ptr<MemoryStore> make_memory_store(const ExperienceConfig& cfg);
+ExperienceConfig load_experience_config(const Config& cfg);
 
 } // namespace agent
 

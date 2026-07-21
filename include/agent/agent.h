@@ -5,6 +5,7 @@
 #define AGENT_AGENT_H
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 #include <functional>
 #include <string>
@@ -14,6 +15,8 @@
 #include "agent/registry.h"
 #include "agent/llm.h"
 #include "agent/conversation_log.h"
+#include "agent/compressor.h"
+#include "agent/experience.h"
 
 namespace agent {
 
@@ -69,7 +72,11 @@ struct AgentHooks {
 //      or max_tool_iterations is reached.
 class Agent {
 public:
-    Agent(const Config& cfg, ToolRegistry& registry, AgentHooks hooks = {});
+    Agent(const Config& cfg, ToolRegistry& registry, AgentHooks hooks = {},
+          std::unique_ptr<CompressionStrategy> compressor = {},
+          std::unique_ptr<CompressionGate> gate = {},
+          std::unique_ptr<MemoryStore> memory_store = {},
+          std::unique_ptr<MemoryRetriever> retriever = {});
 
     // Run one turn to completion, appending to the ongoing conversation.
     // Context from previous turns is retained (the agent is stateful). Returns
@@ -125,6 +132,12 @@ private:
     ConversationLog log_;
     std::vector<Message> history_;
     std::set<std::string> session_approved_;  // tools granted for the session
+    std::unique_ptr<CompressionStrategy> compression_;
+    std::unique_ptr<CompressionGate> gate_;
+    std::unique_ptr<MemoryStore> memory_store_;
+    std::unique_ptr<MemoryRetriever> retriever_;
+    ExperienceConfig experience_cfg_;
+    size_t turn_counter_ = 0;
 };
 
 } // namespace agent
