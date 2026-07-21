@@ -10,6 +10,12 @@
 
 namespace agent {
 
+// Request cancellation of any running tool.  Thread-safe atomic flag;
+// the TUI sets it, the tool's execution loop polls it.
+void request_tool_cancel();
+bool is_tool_cancel_requested();
+void clear_tool_cancel();
+
 class JobService;  // process_* tools bind to the host-owned job service
 
 // Built-in tool factories. Definitions live in tools/*.cpp, compiled and linked

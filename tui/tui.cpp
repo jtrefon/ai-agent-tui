@@ -6,6 +6,7 @@
 #include <agent.h>
 #include <agent/compressor.h>
 #include <agent/experience.h>
+#include <agent/tools.h>
 
 #include "widgets.h"
 #include "textutil.h"
@@ -517,7 +518,10 @@ void Tui::run() {
                 continue;
             }
             if (agent_busy_.load()) {
+                agent::request_tool_cancel();
                 agent_cancel_.store(true);
+                append_line(P_STATUS, "cancelling…");
+                draw(); draw_input(input);
                 continue;
             }
             continue;

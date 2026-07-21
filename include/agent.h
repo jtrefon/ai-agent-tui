@@ -16,6 +16,7 @@
 #include "agent/session.h"
 #include "agent/workspace.h"
 #include "agent/job.h"
+#include "agent/tools.h"
 
 namespace agent {
 // Register the built-in tools into the given registry. `jobs` is the shared

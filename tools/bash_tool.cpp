@@ -23,6 +23,16 @@
 namespace agent {
 
 namespace {
+
+std::atomic<bool> g_tool_cancel{false};
+
+} // namespace
+
+void request_tool_cancel() { g_tool_cancel.store(true); }
+bool is_tool_cancel_requested() { return g_tool_cancel.load(); }
+void clear_tool_cancel() { g_tool_cancel.store(false); }
+
+namespace {
 constexpr int kMaxTimeout = 3600;          // 1 hour ceiling
 constexpr std::size_t kMaxOutput = std::size_t{64} * 1024;   // 64 KiB cap
 
@@ -213,6 +223,11 @@ private:
             }
             bool timed_out = false;
             while (true) {
+                if (is_tool_cancel_requested()) {
+                    timed_out = true;
+                    clear_tool_cancel();
+                    break;
+                }
                 Job* j = jobs_->get(id);
                 if (!j) break;
                 JobInfo i = j->info();

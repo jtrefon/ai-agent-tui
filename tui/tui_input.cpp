@@ -233,6 +233,13 @@ void Tui::build_commands() {
         {"window", {"win", "w"}, "new|close|list|rename <name>",
          "manage chat windows",
          [this](const std::string& a) { cmd_window(a); }},
+        {"stop", {"cancel", "kill"}, "",
+         "terminate the current tool and agent loop",
+          [this](const std::string&) {
+              agent::request_tool_cancel();
+              agent_cancel_.store(true);
+              append_line(P_STATUS, "stop requested");
+          }},
         {"compress", {"compact"}, "",
          "compress conversation history to free context space",
           [this](const std::string&) { cmd_compress(""); }},
