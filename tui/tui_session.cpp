@@ -377,7 +377,7 @@ void Tui::switch_to(size_t idx) {
 }
 
 void Tui::close_window() {
-    if (windows_.size() <= 1) {
+    if (windows_.size() <= 1 || active_ == 0) {
         append_line(P_STATUS, "cannot close the last window");
         return;
     }
