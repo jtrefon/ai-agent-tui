@@ -591,14 +591,15 @@ void Tui::run() {
             quit_ = true;
             break;
         }
-        if (ch == KEY_UP && !drawer_open_ && !win().prompt_history.empty()) {
-            if (win().history_pos > 0) {
-                --win().history_pos;
-                input = win().prompt_history[win().history_pos];
-            }
+        // Ctrl+P / Ctrl+N: history recall (Emacs-style, standard for terminals).
+        // KEY_UP/KEY_DOWN stay bound to viewport scrolling (shared with the
+        // mouse wheel via alternate scroll mode, which sends the same codes).
+        if (ch == 16 && !drawer_open_ && !win().prompt_history.empty()) {  // Ctrl+P
+            if (win().history_pos > 0) --win().history_pos;
+            input = win().prompt_history[win().history_pos];
             draw(); draw_input(input); continue;
         }
-        if (ch == KEY_DOWN && !drawer_open_ && !win().prompt_history.empty()) {
+        if (ch == 14 && !drawer_open_ && !win().prompt_history.empty()) {  // Ctrl+N
             if (win().history_pos < win().prompt_history.size() - 1) {
                 ++win().history_pos;
                 input = win().prompt_history[win().history_pos];
