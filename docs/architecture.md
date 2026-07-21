@@ -253,5 +253,8 @@ Agent hook fires → build AgentEvent → lock(mutex) → queue.push() → unloc
 - **Sub-agents** — spawn child agent sessions for independent sub-tasks.
 - **Human-in-the-loop checkpoints** — pause at configurable points for
   user review (before file writes, before bash execution in `write` mode).
+- **Context compression** — tree-shaking conversation history to maximise
+  context space while preserving task state. See
+  [`docs/architecture/context-compression.md`](architecture/context-compression.md).
 - **Tool dependency graphs** — let tools declare prerequisites so the
   dispatcher can parallelize or order them intelligently.
