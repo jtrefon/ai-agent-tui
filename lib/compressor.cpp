@@ -31,26 +31,6 @@ bool is_decision_or_preference(const Message& msg) {
     });
 }
 
-bool is_stale_tool_result(const Message& msg, size_t idx,
-                           const std::vector<Message>& history) {
-    if (msg.role != "tool") return false;
-    for (size_t j = idx + 1; j < history.size(); ++j) {
-        if (history[j].role == "user") return true;
-        if (history[j].role == "assistant") break;
-    }
-    return false;
-}
-
-bool is_superseded_attempt(const Message& msg, size_t idx,
-                            const std::vector<Message>& history) {
-    if (msg.role != "tool") return false;
-    for (size_t j = idx + 1; j < history.size(); ++j) {
-        if (history[j].role != "tool") continue;
-        if (history[j].name == msg.name) return true;
-    }
-    return false;
-}
-
 bool is_diagnostic_output(const Message& msg) {
     if (msg.role != "tool") return false;
     if (msg.content.size() < 100) return false;
@@ -91,7 +71,7 @@ std::vector<Classification> TreeShaker::classify(
         Classification tag = Classification::context;
         if (i >= active_root || is_decision_or_preference(msg)) {
             tag = Classification::core;
-        } else if (is_diagnostic_output(msg) || is_superseded_attempt(msg, i, history)) {
+        } else if (is_diagnostic_output(msg)) {
             tag = Classification::prune;
         } else if (msg.role == "assistant" && !msg.reasoning.empty()) {
             tag = Classification::context;
