@@ -62,7 +62,9 @@ void Tui::append_line_ts(int color, const std::string& text,
     auto wrapped = rich::wrap(head, width());
     for (auto& l : wrapped) win().lines.push_back(std::move(l));
     trim_lines();
-    win().scroll_top = max_scroll();
+    int max = max_scroll();
+    if (win().scroll_top >= max - 2)
+        win().scroll_top = max;
 }
 void Tui::append_rich(const rich::Line& l) {
     win().lines.push_back(l);
@@ -241,8 +243,22 @@ void Tui::draw() {
     chat_canvas_.set_top(win().scroll_top);
     chat_canvas_.render();
 
-    draw_status_bar("ln " + std::to_string(win().scroll_top + 1) + "/" +
-                    std::to_string(chat_canvas_.wrapped_count()));
+    {
+        int total = chat_canvas_.wrapped_count();
+        int pos = win().scroll_top;
+        int vis = chat_height();
+        // Build a mini scrollbar glyph: 10 chars, █ = visible, ░ = hidden
+        // When at bottom (pos >= total - vis) show nothing — clean bar.
+        std::string scroll_glyph;
+        if (pos > 0 && total > vis) {
+            int bar_cells = 8;
+            double frac = static_cast<double>(pos) / (total - vis);
+            int fill = static_cast<int>(frac * bar_cells);
+            scroll_glyph = " [" + std::string(fill, '#')
+                         + std::string(bar_cells - fill, '.') + "]";
+        }
+        draw_status_bar(scroll_glyph);
+    }
     wnoutrefresh(stdscr);
 }
 

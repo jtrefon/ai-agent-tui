@@ -27,6 +27,8 @@ Tui::Tui(agent::Config cfg, agent::ToolRegistry& reg, agent::JobService& jobs)
     set_escdelay(25);
     curs_set(1);
     start_color();
+    mousemask(ALL_MOUSE_EVENTS, nullptr);
+    mouseinterval(0);
     set_modal_flag(&modal_open_);
     use_default_colors();
     use_legacy_coding(1);
@@ -543,6 +545,20 @@ void Tui::run() {
             }
             draw_input(input);
             continue;
+        }
+        if (ch == KEY_MOUSE) {
+            MEVENT ev;
+            if (getmouse(&ev) == OK) {
+                if (ev.bstate & BUTTON4_PRESSED) {
+                    win().scroll_top = std::max(0, win().scroll_top - 3);
+                    draw(); draw_input(input); continue;
+                }
+                if (ev.bstate & BUTTON5_PRESSED) {
+                    win().scroll_top = std::min(max_scroll(),
+                                                win().scroll_top + 3);
+                    draw(); draw_input(input); continue;
+                }
+            }
         }
         if (ch == KEY_NPAGE) {
             if (win().read_only) continue;
