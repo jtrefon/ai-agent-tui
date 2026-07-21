@@ -27,8 +27,13 @@ Tui::Tui(agent::Config cfg, agent::ToolRegistry& reg, agent::JobService& jobs)
     set_escdelay(25);
     curs_set(1);
     start_color();
-    mousemask(ALL_MOUSE_EVENTS, nullptr);
-    mouseinterval(0);
+    // Enable xterm alternate scroll mode so the mouse wheel sends cursor keys
+    // instead of mouse events.  This keeps native text selection working
+    // (click-and-drag, Cmd-C) while still letting the wheel scroll the chat.
+    // Without this, mousemask() would intercept all mouse input and break
+    // terminal-level selection on macOS and Linux.
+    std::fputs("\033[?1007h", stdout);
+    std::fflush(stdout);
     set_modal_flag(&modal_open_);
     use_default_colors();
     use_legacy_coding(1);
@@ -37,6 +42,8 @@ Tui::Tui(agent::Config cfg, agent::ToolRegistry& reg, agent::JobService& jobs)
 }
 
 Tui::~Tui() {
+    std::fputs("\033[?1007l", stdout);
+    std::fflush(stdout);
     agent_cancel_ = true;
     if (agent_thread_.joinable()) agent_thread_.join();
 
@@ -546,18 +553,13 @@ void Tui::run() {
             draw_input(input);
             continue;
         }
-        if (ch == KEY_MOUSE) {
-            MEVENT ev;
-            if (getmouse(&ev) == OK) {
-                if (ev.bstate & BUTTON4_PRESSED) {
-                    win().scroll_top = std::max(0, win().scroll_top - 3);
-                    draw(); draw_input(input); continue;
-                }
-                if (ev.bstate & BUTTON5_PRESSED) {
-                    win().scroll_top += 3;
-                    draw(); draw_input(input); continue;
-                }
-            }
+        if (ch == KEY_UP && !drawer_open_) {
+            win().scroll_top = std::max(0, win().scroll_top - 1);
+            draw(); draw_input(input); continue;
+        }
+        if (ch == KEY_DOWN && !drawer_open_) {
+            win().scroll_top += 1;
+            draw(); draw_input(input); continue;
         }
         if (ch == KEY_NPAGE) {
             if (win().read_only) continue;
