@@ -14,7 +14,10 @@ agent::Session Tui::snapshot(Window& w) const {
     agent::Session s;
     s.id = w.session_id;
     s.model = cfg_.model;
-    s.messages = w.agent ? w.agent->history() : std::vector<agent::Message>{};
+    if (w.agent) {
+        s.messages = w.agent->history();
+        s.meta = w.agent->meta_;
+    }
     s.derive_title();
     if (w.title != "chat" && !w.title.empty()) s.title = w.title;
     return s;
@@ -56,6 +59,8 @@ void Tui::load_session(const std::string& id) {
     Window& w = new_window(s.title.empty() ? "chat" : s.title);
     w.session_id = s.id;
     w.agent->set_history(s.messages);
+    if (!s.meta.empty())
+        w.agent->meta_ = s.meta;
     for (const auto& m : s.messages) {
         if (m.role == "user") {
             append_line(P_USER, "> " + m.content);

@@ -96,9 +96,23 @@ public:
     void reset();
 
     // Force an immediate compression of the conversation history, bypassing
-    // the gate.  Has no effect if no compressor is configured.
-    // Returns a summary of what happened (or empty if no-op).
+    // the gate.  The original full history is stored in meta_["archive"] so
+    // it can be recovered later with decompress().  Returns a summary.
     CompressionResult compress_now();
+
+    // True if an archive exists from a prior compress_now().
+    bool has_archive() const {
+        return meta_.contains("archive") && !meta_["archive"].is_null()
+            && meta_["archive"].contains("messages");
+    }
+
+    // Restore the full conversation from the archive.  Returns false if no
+    // archive exists or decompression fails.
+    bool decompress();
+
+    // Internal metadata (archive, mentions, tracking) — never sent to the LLM.
+    // Persisted alongside history_ in the session file.
+    json meta_ = json::object();
 
     // Result of the most recent compression, or default-constructed if none.
     const CompressionResult& last_compression_result() const {

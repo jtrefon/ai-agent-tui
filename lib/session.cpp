@@ -78,14 +78,17 @@ bool mkdirs(const std::string& path) {
 json Session::to_json() const {
     json arr = json::array();
     for (const auto& m : messages) arr.push_back(msg_to_json(m));
-    return json{
-        {"id", id},
-        {"title", title},
-        {"model", model},
-        {"created_ms", created_ms},
-        {"updated_ms", updated_ms},
-        {"messages", arr},
-    };
+    json result = json::object();
+    result["id"] = id;
+    result["title"] = title;
+    result["model"] = model;
+    result["created_ms"] = created_ms;
+    result["updated_ms"] = updated_ms;
+    result["messages"] = arr;
+    // Persist non-empty meta alongside history (never sent to LLM).
+    if (!meta.empty())
+        result["meta"] = meta;
+    return result;
 }
 
 Session Session::from_json(const json& j) {
@@ -101,6 +104,8 @@ Session Session::from_json(const json& j) {
         s.updated_ms = j["updated_ms"].get<long long>();
     if (j.contains("messages") && j["messages"].is_array())
         for (const auto& m : j["messages"]) s.messages.push_back(msg_from_json(m));
+    if (j.contains("meta") && j["meta"].is_object())
+        s.meta = j["meta"];
     return s;
 }
 

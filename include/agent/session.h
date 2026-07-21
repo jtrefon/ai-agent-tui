@@ -19,6 +19,7 @@ struct Session {
     long long created_ms = 0;    // unix ms
     long long updated_ms = 0;    // unix ms, bumped on save
     std::vector<Message> messages;
+    json meta;                     // internal metadata (archive, mentions) — never sent to LLM
 
     // Serialize/deserialize to the on-disk JSON shape.
     json to_json() const;

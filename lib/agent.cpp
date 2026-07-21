@@ -177,18 +177,25 @@ const AgentHooks& Agent::silent_hooks() const {
 CompressionResult Agent::compress_now() {
     CompressionResult r;
     if (!compression_) return r;
+    if (has_archive()) return r;  // already compressed, must decompress first
 
     auto cc = load_compression_config(cfg_);
 
-    // Count tokens before — from the full history
     for (const auto& msg : history_)
         r.tokens_before += (msg.content.size() + msg.reasoning.size()) / 4;
     r.messages_before = history_.size();
 
-    // Compute what compression would do, without mutating history_.
-    // history_ stays full so autosave / session persistence never loses data.
     auto compressed = compression_->compress(history_, cc);
     if (!compressed.empty() && compressed.size() < history_.size()) {
+        // Store the original full history in meta_["archive"] before mutating
+        json archive_messages = json::array();
+        for (const auto& msg : history_)
+            archive_messages.push_back({{"role", msg.role},
+                                        {"content", msg.content},
+                                        {"name", msg.name}});
+        meta_["archive"]["messages"] = archive_messages;
+        meta_["archive"]["compressed_at"] = "now";
+
         TreeShaker shaker;
         auto tags = shaker.classify(history_);
         for (auto t : tags) {
@@ -196,16 +203,31 @@ CompressionResult Agent::compress_now() {
             else if (t == Classification::context) ++r.context_count;
             else if (t == Classification::prune) ++r.prune_count;
         }
-        for (const auto& msg : compressed)
-            r.tokens_after += (msg.content.size() + msg.reasoning.size()) / 4;
-        r.messages_after = compressed.size();
-    } else {
-        r.messages_after = history_.size();
-        r.tokens_after = r.tokens_before;
+
+        history_ = std::move(compressed);
     }
+
+    for (const auto& msg : history_)
+        r.tokens_after += (msg.content.size() + msg.reasoning.size()) / 4;
+    r.messages_after = history_.size();
 
     last_compression_ = r;
     return r;
+}
+
+bool Agent::decompress() {
+    if (!has_archive()) return false;
+    auto& arch = meta_["archive"];
+    history_.clear();
+    for (const auto& j : arch["messages"]) {
+        Message m;
+        m.role = j.value("role", "");
+        m.content = j.value("content", "");
+        m.name = j.value("name", "");
+        history_.push_back(std::move(m));
+    }
+    meta_["archive"] = nullptr;  // clear archive
+    return true;
 }
 
 void Agent::reset() {
