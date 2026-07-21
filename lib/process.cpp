@@ -31,6 +31,11 @@ pid_t spawn_shell(const std::string& command, const std::string& cwd,
         dup2(pipefd[1], STDOUT_FILENO);
         dup2(pipefd[1], STDERR_FILENO);
         close(pipefd[1]);
+        // Close stdin so child processes never steal terminal input from the
+        // parent's ncurses getch() — npm, react scripts, and other interactive
+        // programs should not hang waiting for keyboard input.
+        int null_fd = open("/dev/null", O_RDONLY);
+        if (null_fd >= 0) { dup2(null_fd, STDIN_FILENO); close(null_fd); }
         if (!cwd.empty() && chdir(cwd.c_str()) != 0) _exit(127);
         execl("/bin/sh", "sh", "-c", command.c_str(), (char*)nullptr);
         _exit(127);
