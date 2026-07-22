@@ -21,9 +21,24 @@ std::string find_duplicate_call(const std::string& fn, const json& args,
                 auto func = tc.value("function", json::object());
                 if (func.value("name", "") == fn &&
                     func.value("arguments", "") == args_str) {
-                    return "tool '" + fn + "' was already called with these "
-                           "exact arguments. Use the result from the "
-                           "conversation history above instead of repeating it.";
+                    // Build a short summary of the arguments (first 120 chars)
+                    std::string preview;
+                    if (args.is_object()) {
+                        for (auto it = args.begin(); it != args.end(); ++it) {
+                            if (it.value().is_string())
+                                preview += it.value().get<std::string>() + " ";
+                            else
+                                preview += it.key() + " ";
+                        }
+                    }
+                    if (preview.size() > 120)
+                        preview.resize(120);
+                    return "You already ran \"" + fn + "\" with these "
+                           "exact parameters (" + preview + "...). "
+                           "Repeating the same tool call will produce the "
+                           "same result. Use the output already in the "
+                           "conversation, or if you hit a loop, say \"done\" "
+                           "or \"stop\" to end this task.";
                 }
             }
         }
