@@ -408,14 +408,30 @@ void Tui::draw_input(const std::string& s) {
     last_input_ = s;
     draw_drawer(s);
     int y = height() - 1;
+    int w = width();
     move(y, 0);
     clrtoeol();
     attron(COLOR_PAIR(P_USER));
     const std::string kPrompt = "amber> ";
     std::string shown = kPrompt + s;
-    mvaddnstr(y, 0, shown.c_str(), width());
+    int prompt_w = static_cast<int>(kPrompt.size());
+    int total_w = display_cols(shown);
+    // Horizontal scrolling: if the input exceeds the terminal width, keep
+    // the cursor (end of input) visible by shifting the visible window.
+    int scroll_off = std::max(0, total_w - w);
+    int vis_w = std::min(total_w, w);
+    std::string visible;
+    if (scroll_off > 0 && scroll_off < prompt_w)
+        scroll_off = 0;  // keep prompt visible if possible
+    visible = shown.substr(static_cast<size_t>(scroll_off),
+                           static_cast<size_t>(vis_w));
+    // Mark overflow with a leading ellipsis
+    if (scroll_off > 0 && !visible.empty())
+        visible[0] = '~';  // overflow indicator (TODO: use \u2026 when UTF-8 support is unified)
+    mvaddnstr(y, 0, visible.c_str(), vis_w);
     attroff(COLOR_PAIR(P_USER));
-    int cx = std::min(display_cols(shown), width() - 1);
+    int cx = std::min(total_w - scroll_off, w - 1);
+    if (cx < 0) cx = 0;
     curs_set(1);
     move(y, cx);
     wnoutrefresh(stdscr);
