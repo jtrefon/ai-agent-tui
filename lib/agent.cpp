@@ -273,7 +273,7 @@ std::string Agent::run(const std::string& user_prompt) {
     // without penalizing thorough multi-step work.
     static constexpr int kLoopRepeat = 5;
     int loop_count = 0;
-    json last_tool_calls;
+    std::string last_loop_key;
 
     for (int iter = 0; iter < cfg_.max_tool_iterations; ++iter) {
         dbg("iteration " + std::to_string(iter + 1) + "/" +
@@ -297,12 +297,24 @@ std::string Agent::run(const std::string& user_prompt) {
                                           hooks_, log_, session_approved_,
                                           history_);
 
-            // Loop detection: identical tool call sets without progress
-            if (ok && last_tool_calls == reply.tool_calls) {
-                ++loop_count;
-            } else {
-                loop_count = 0;
-                last_tool_calls = reply.tool_calls;
+            // Loop detection: same tool names + same arguments repeated.
+            auto loop_key = [](const json& calls) -> std::string {
+                std::string key;
+                for (const auto& tc : calls) {
+                    auto fn = tc.value("function", json::object());
+                    key += fn.value("name", "") + ":";
+                    key += fn.value("arguments", "") + "|";
+                }
+                return key;
+            };
+            if (ok) {
+                std::string cur = loop_key(reply.tool_calls);
+                if (cur == last_loop_key) {
+                    ++loop_count;
+                } else {
+                    loop_count = 0;
+                    last_loop_key = cur;
+                }
             }
             if (loop_count >= kLoopRepeat) {
                 if (hooks_.on_status)
