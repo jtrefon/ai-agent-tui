@@ -679,13 +679,14 @@ void Tui::run() {
             if (!input.empty()) input.pop_back();
             arg_tab_prefix_.clear();
             update_drawer(input);
-            draw(); draw_input(input);
-        } else if (ch >= 32 && ch <= 126) {
+            draw(); draw_input(input); continue;
+        }
+        if (ch >= 32 && ch <= 126 && input.size() < 65536) {
             input += static_cast<char>(ch);
             arg_tab_prefix_.clear();
             update_drawer(input);
             ensure_chat_window();
-            draw(); draw_input(input);
+            draw(); draw_input(input); continue;
         }
         if (dirty_) {
             flush();
