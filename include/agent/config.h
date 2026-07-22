@@ -75,6 +75,14 @@ struct Config {
     // empty. Env: AMBER_DEBUG.
     std::string debug_log;
 
+    // Detection toggles (BitchX-style /set detection namespace).
+    //   loop:      tool-loop and text-loop detectors; when off the model runs
+    //              until max_tool_iterations or a natural stop.
+    //   duplicate: find_duplicate_call in dispatch; when off the model may
+    //              repeat the exact same tool call across turns.
+    bool detection_loop = true;
+    bool detection_duplicate = true;
+
     // Context compression settings. 0 means "use default".
     double compression_threshold = 0.0;
     int compression_min_turns = 0;

@@ -214,8 +214,8 @@ private:
             // (rather than relying on the TUI's per-tick check_timeouts) keeps
             // the result identical headless and in tests.
             std::string id = jobs_->start(command, Workspace::root(),
-                                          /*hard_timeout_s=*/0,
-                                          /*idle_timeout_s=*/timeout);
+                                           /*hard_timeout_s=*/0,
+                                           /*idle_timeout_s=*/timeout);
             if (id.empty()) {
                 r.ok = false;
                 r.error = "spawn failed";

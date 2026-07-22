@@ -4,6 +4,7 @@
 #include "http_transport.h"
 #include "agent/agent_helpers.h"
 #include "agent/debug_log.h"
+#include "agent/tools.h"
 
 #include <curl/curl.h>
 #include <stdexcept>
@@ -12,6 +13,12 @@
 namespace agent {
 
 namespace {
+
+// libcurl progress callback — aborts the transfer when the tool-cancel
+// flag is set, so Esc / /stop interrupts a blocking LLM call promptly.
+int cancel_check_cb(void*, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+    return is_tool_cancel_requested() ? 1 : 0;
+}
 
 // libcurl write callback shim: variadic_setopt cannot convert a lambda to a
 // function pointer, so we need a named function. Forwards to StreamParser.
@@ -110,6 +117,8 @@ std::string post_completion(const Config& cfg, const std::string& payload,
     curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, LLMClient::write_cb);
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(c, CURLOPT_TIMEOUT, accept_sse ? 900L : 300L);
+    curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, cancel_check_cb);
 
     CURLcode rc = curl_easy_perform(c);
     long http_code = 0;
@@ -157,6 +166,8 @@ void stream_completion(const Config& cfg, const std::string& payload,
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &parser);
     curl_easy_setopt(c, CURLOPT_TIMEOUT, 900L);
     curl_easy_setopt(c, CURLOPT_BUFFERSIZE, 1024L);  // surface deltas promptly
+    curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, cancel_check_cb);
 
     CURLcode rc = curl_easy_perform(c);
     curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &status_out);
