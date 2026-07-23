@@ -138,11 +138,21 @@ Every bug fix and every feature MUST follow this strict sequence:
 │     before any production code is written.                   │
 │                                                              │
 │  4. GREEN — Implement the fix. Make the test pass. Refactor  │
-│     to meet all Engineering Principles above.                │
+│     to meet all Engineering Principles above. Run local      │
+│     linting and static analysis every few edits (don't       │
+│     batch all issues to the end). Address every clang-tidy   │
+│     and cppcheck finding — zero warnings is the threshold.   │
+│     If your editor has LSP (clangd) integration, keep the    │
+│     diagnostics panel clean as you type; LSP-reported errors │
+│     (type mistakes, missing includes, const correctness)     │
+│     must be resolved before the next compile.                │
 │                                                              │
-│  5. PR — Open/update the pull request. All checks must pass  │
-│     (make, make test, make lint, make analyze). Reviewer     │
-│     verifies the diff matches the proposal.                  │
+│  5. PR — Open/update the pull request. Run final clean
+│     verification: make clean && make && make test &&         │
+│     make lint && make analyze. All must pass with zero       │
+│     warnings. The reviewer verifies the diff matches the     │
+│     proposal and that no lint/analysis regression was        │
+│     introduced.                                              │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -150,6 +160,9 @@ Every bug fix and every feature MUST follow this strict sequence:
 - Do NOT implement without an approved proposal (step 3).
 - A fix that "can't be tested" is a sign the architecture needs refactoring,
   not an excuse to skip the test.
+- Lint and analysis findings are **blockers**, not suggestions. A PR with any
+  new clang-tidy or cppcheck warning is rejected regardless of correctness.
+  See the `make lint` / `make analyze` targets in the Build & verify section.
 
 ### Code review checklist
 
