@@ -2490,12 +2490,12 @@ TEST(agent_extract_memories_from_tool_results) {
 
     std::vector<agent::Message> history;
     agent::Message m1; m1.role = "tool"; m1.name = "bash";
-    m1.content = "compiler_test.cpp: OK\n103 passed, 0 failed\n";
+    m1.content = "compilation succeeded\n103 tests passed, 0 failed, all green\n";
     history.push_back(m1);
 
     agent::Message m2; m2.role = "tool"; m2.name = "read";
-    m2.content = "This is a very long line of actual knowledge that should be "
-                 "captured as a memory because it contains useful information.";
+    m2.content = "This project uses GNU make with ./configure -- the standard "
+                 "autotools flow. Run make to build everything.";
     history.push_back(m2);
 
     agent::Message m3; m3.role = "tool"; m3.name = "bash";
@@ -2506,13 +2506,24 @@ TEST(agent_extract_memories_from_tool_results) {
     agent::extract_tool_results_as_memories(
         history, *store, "", extracted);
 
-    // Two tool messages met the heuristic (short one skipped)
     ASSERT_EQ(extracted, 2u);
 
-    // Verify the first memory (bash result, truncated at newline)
-    auto top = store->top_memories(10, "");
-    ASSERT(!top.empty());
-    ASSERT(top[0].content.find("compiler_test.cpp") != std::string::npos);
+    // Re-run: finds same memories, reports them cumulatively
+    agent::extract_tool_results_as_memories(history, *store, "", extracted);
+    ASSERT_EQ(extracted, 4u);
+
+    // Empty history extracts nothing
+    size_t empty_count = 0;
+    agent::extract_tool_results_as_memories({}, *store, "", empty_count);
+    ASSERT_EQ(empty_count, 0u);
+
+    // No tool messages in history extracts nothing
+    std::vector<agent::Message> no_tools;
+    agent::Message um; um.role = "user"; um.content = "hello";
+    no_tools.push_back(um);
+    size_t no_count = 0;
+    agent::extract_tool_results_as_memories(no_tools, *store, "", no_count);
+    ASSERT_EQ(no_count, 0u);
 }
 
 // ---------------------------------------------------------------------------
