@@ -1,82 +1,121 @@
 # Tools
 
-Invoke tools by name with a JSON object of arguments matching the
-schema. Results are returned as text and fed back into the conversation.
+## Result envelope
 
-| Tool | When to use |
-|------|-------------|
-| `search` | Find symbols, definitions, usages, patterns. Read-only, cheap, broad. |
-| `read` | Inspect file contents. Use `offset` to page through long files. |
-| `write` | Edit existing files with targeted `old`/`new` blocks. Use `old=""` for new files. |
-| `bash` | Build, test, run git, execute shell commands. Requires approval. |
-| `process_start` | Launch long-running commands (servers, watchers, builds) in the background. |
-| `process_read` | Check progress of a background job. Returns output delta since last read. |
-| `process_stop` | Terminate a background job and return its captured output. |
+Every tool result uses the exact same form:
+
+```
+[tool=<name> args=<json> status=<status> meta=<json>]
+<content>
+[end]
+```
+
+| Field | Meaning |
+|-------|---------|
+| `name` | The tool that was called |
+| `args` | Your original call arguments echoed back (compact JSON) |
+| `status` | One of: `ok`, `error`, `denied`, `timeout` |
+| `meta` | Structured metadata (lines, hits, exit code, etc.) |
+| `<content>` | The result payload |
+| `[end]` | End marker — no more output from this call |
+
+The envelope never changes shape. Only the values differ. Parse the
+header line to determine what happened; read the content for details.
+
+## Tool categories
+
+| Category | Tools | Expected output |
+|----------|-------|-----------------|
+| **Query** | `search`, `read` | Return data. Full content in envelope. |
+| **Command** | `write`, `bash`, `process_*` | Return status. Summary in content. |
+
+---
 
 ## search
 
-Search the codebase for a pattern. Default mode is regex (grep); set
-`mode="semantic"` for meaning-based ranking over an indexed view.
+Query filesystem. Use first to find symbols, definitions, and patterns.
 
-Parameters:
-- `pattern` (string, required) — Short regex or query (max 256 chars).
-- `path` (string) — Directory or file to search (default: workspace root).
-- `glob` (string) — Optional filter, e.g. "*.cpp".
-- `mode` (string) — "grep" (default) or "semantic".
-- `max` (integer) — Max matches to return (default 200).
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| pattern | string | yes | Short regex or query (max 256 chars) |
+| path | string | no | Directory to search (default: workspace root) |
+| glob | string | no | File filter, e.g. `"*.cpp"` |
+| mode | string | no | `"grep"` (default) or `"semantic"` |
+| max | integer | no | Max matches (default 200) |
+
+**Output**: matching lines with file paths and line numbers.
+**When**: finding symbols, usages, definitions before reading files.
 
 ## read
 
-Read a file with pagination. The workspace root confines access.
+Read a file with pagination.
 
-Parameters:
-- `file_path` (string, required) — Path relative to workspace or absolute.
-- `offset` (integer) — Starting line number (1-indexed, default 1).
-- `limit` (integer) — Max lines to return (default 2000).
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| path | string | yes | File to read (confined to workspace) |
+| offset | integer | no | Starting line, 1-based (default 1) |
+| limit | integer | no | Max lines to return (default 2000) |
+
+**Output**: lines prefixed with number. Footer indicates more available.
+**When**: inspecting file contents after search identified relevant files.
 
 ## write
 
-Make targeted edits to a file. Create a file by setting `old=""`.
-Edits are confined to the workspace root.
+Edit a file with targeted `old`/`new` blocks. Use `old=""` to create.
 
-Parameters:
-- `file_path` (string, required) — Path relative to workspace or absolute.
-- `old` (string, required) — Exact text to replace (empty for new files).
-- `new` (string, required) — Replacement text.
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| path | string | yes | File to edit (confined to workspace) |
+| edits | array | yes | `[{old, new}, ...]` blocks to apply in order |
+
+**Output**: count of edits applied.
+**When**: after reading and planning — make the actual change.
 
 ## bash
 
-Run a shell command inside the workspace root. Returns combined
-stdout+stderr and exit code. Approved interactively (TTY prompt or
-TUI dialog). Fail-safe: denied when stdin is not a TTY and `--yes`
-was not passed.
+Run a shell command. Requires interactive approval.
 
-Parameters:
-- `command` (string, required) — Shell command (run via `/bin/sh -c`).
-- `timeout` (integer) — Seconds of no output before kill (default 60).
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| command | string | yes | Shell command via `/bin/sh -c` |
+| timeout | integer | no | Seconds of no output before kill (default 60) |
+
+**Output**: combined stdout+stderr, exit code, truncation notice.
+**When**: building, testing, linting, analysing, git operations.
 
 ## process_start
 
-Start a command in the background and return a `job_id` immediately.
-Use this instead of `bash` for long-running or streaming commands.
+Start a background job. Returns immediately with a `job_id`.
 
-Parameters:
-- `command` (string, required) — Shell command to run.
-- `timeout` (integer) — Hard lifetime in seconds (default 600).
-- `idle_timeout` (integer) — Seconds of no output before auto-kill (default 30).
-- `cwd` (string) — Working directory (default: workspace root).
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| command | string | yes | Shell command to run |
+| timeout | integer | no | Hard lifetime in seconds (default 600) |
+| idle_timeout | integer | no | Seconds idle before kill (default 30) |
+| cwd | string | no | Working directory (default: workspace) |
+
+**Output**: bare `job_id` string (pass to process_read/process_stop).
+**When**: long-running commands — dev servers, watchers, builds.
 
 ## process_read
 
-Fetch new output for a background job since the last read.
+Fetch new output from a background job since the last read.
 
-Parameters:
-- `id` (string, required) — Job id from process_start.
-- `all` (boolean) — Return full output instead of delta (default false).
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| id | string | yes | Job id from process_start |
+| all | boolean | no | Return full output instead of delta |
+
+**Output**: status line + delta output.
+**When**: checking progress of a background job.
 
 ## process_stop
 
 Terminate a background job and return its captured output.
 
-Parameters:
-- `id` (string, required) — Job id from process_start.
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| id | string | yes | Job id from process_start |
+
+**Output**: "stopped" notice + captured output.
+**When**: killing a job that is no longer needed.
